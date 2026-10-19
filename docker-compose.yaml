@@ -1,0 +1,21 @@
+services:
+  weknora-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: weknora-gateway
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./tokendance-gateway:/app/tokendance-gateway:ro
+      - ./config.yaml:/app/config.yaml:ro
+    networks:
+      - weknora-network
+
+networks:
+  weknora-network:
+    external: true
+    name: root_default

@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WeKnora 空间与用户配置同步控制台</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Vue 3 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <!-- Heroicons SVG helper or Icons -->
+  <style>
+    [v-cloak] { display: none; }
+    .badge-dot {
+      display: inline-block;
+      width: 0.5rem;
+      height: 0.5rem;
+      border-radius: 9999px;
+      margin-right: 0.375rem;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen">
+  <div id="app" v-cloak class="flex flex-col min-h-screen">
+    <!-- 顶部导航栏 -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white font-bold text-lg shadow-md shadow-indigo-100">
+            W
+          </div>
+          <div>
+            <h1 class="text-base font-bold text-slate-900 leading-tight">WeKnora 配置同步控制台</h1>
+            <p class="text-xs text-slate-500">统一账户中心 / 企微组织架构 · LLM 模型 · MinIO 存储一体化看板</p>
+          </div>
+        </div>
+
+        <!-- 状态指示与快捷操作 -->
+        <div class="flex items-center space-x-3">
+          <div class="hidden sm:flex items-center text-xs text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
+            <span class="badge-dot" :class="syncState.is_syncing ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'"></span>
+            <span>{{ syncState.is_syncing ? '同步任务进行中...' : '服务运行正常' }}</span>
+            <span class="mx-2 text-slate-300">|</span>
+            <span>周期: {{ overview.cron_schedule || '30m' }}</span>
+          </div>
+
+          <!-- 母空间基准配置入口按钮 -->
+          <button 
+            @click="openRootConfigDrawer" 
+            class="inline-flex items-center px-3 py-1.5 border border-indigo-200 shadow-sm text-xs font-semibold rounded-lg text-indigo-700 bg-indigo-50 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
+            <span class="mr-1">⚙️</span>
+            母空间基准配置
+          </button>
+
+          <button 
+            @click="fetchData" 
+            :disabled="loading"
+            class="inline-flex items-center px-3 py-1.5 border border-slate-300 shadow-sm text-xs font-medium rounded-lg text-slate-700 bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
+            <svg class="w-4 h-4 mr-1.5 text-slate-400" :class="{'animate-spin': loading}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            刷新
+          </button>
+
+          <button 
+            @click="triggerSyncAll" 
+            :disabled="syncState.is_syncing || loading"
+            class="inline-flex items-center px-3.5 py-1.5 border border-transparent text-xs font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 shadow-sm shadow-indigo-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            <svg class="w-4 h-4 mr-1.5" :class="{'animate-spin': syncState.is_syncing}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+            </svg>
+            {{ syncState.is_syncing ? '全量同步中...' : '立即全量同步' }}
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- 主体区域 -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      <!-- 概览指标卡片 -->
+      <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- 卡片 1 -->
+        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:border-slate-300 transition-colors">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">总空间 (Tenants)</span>
+            <div class="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">
+              🏢
+            </div>
+          </div>
+          <div class="mt-2 flex items-baseline justify-between">
+            <span class="text-2xl font-bold text-slate-900">{{ overview.total_tenants }}</span>
+            <span class="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium">一级部门 {{ overview.dept_tenants }}</span>
+          </div>
+          <div class="mt-1 flex items-center justify-between">
+            <p class="text-xs text-slate-400">根共享空间 ID: {{ overview.root_tenant_id || 10001 }}</p>
+            <button 
+              @click="openRootConfigDrawer" 
+              class="text-xs text-indigo-600 hover:text-indigo-800 font-semibold hover:underline inline-flex items-center">
+              ⚙️ 基准配置
+            </button>
+          </div>
+        </div>
+
+        <!-- 卡片 2 -->
+        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:border-slate-300 transition-colors">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">模型同步就绪率</span>
+            <div class="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-sm">
+              🤖
+            </div>
+          </div>
+          <div class="mt-2 flex items-baseline justify-between">
+            <span class="text-2xl font-bold text-slate-900">{{ overview.models_synced_tenants }} / {{ overview.total_tenants }}</span>
+            <span class="text-xs bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full font-medium">
+              {{ overview.total_tenants ? Math.round(overview.models_synced_tenants * 100 / overview.total_tenants) : 0 }}%
+            </span>
+          </div>
+          <div class="mt-1 flex items-center justify-between">
+            <p class="text-xs text-slate-400">基准模型数: {{ overview.root_models_count || 5 }} 个 (GLM/bge/qwen等)</p>
+            <button 
+              @click="openRootConfigDrawer(); activeRootTab = 'models'" 
+              class="text-xs text-indigo-600 hover:text-indigo-800 font-medium hover:underline inline-flex items-center">
+              配置模型 ›
+            </button>
+          </div>
+        </div>
+
+        <!-- 卡片 3 -->
+        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:border-slate-300 transition-colors">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">MinIO 存储就绪率</span>
+            <div class="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm">
+              📦
+            </div>
+          </div>
+          <div class="mt-2 flex items-baseline justify-between">
+            <span class="text-2xl font-bold text-slate-900">{{ overview.storage_ready_tenants }} / {{ overview.total_tenants }}</span>
+            <span class="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full font-medium">
+              {{ overview.total_tenants ? Math.round(overview.storage_ready_tenants * 100 / overview.total_tenants) : 0 }}%
+            </span>
+          </div>
+          <div class="mt-1 flex items-center justify-between">
+            <p class="text-xs text-slate-400">默认引擎: System MINIO (weknora)</p>
+            <button 
+              @click="openRootConfigDrawer(); activeRootTab = 'storage'" 
+              class="text-xs text-indigo-600 hover:text-indigo-800 font-medium hover:underline inline-flex items-center">
+              配置存储 ›
+            </button>
+          </div>
+        </div>
+
+        <!-- 卡片 4 -->
+        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:border-slate-300 transition-colors">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider">上次同步状态</span>
+            <div class="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-sm">
+              ⏱️
+            </div>
+          </div>
+          <div class="mt-2 flex items-baseline justify-between">
+            <span class="text-sm font-semibold text-slate-800 truncate" :title="overview.last_sync_time || '尚未触发'">
+              {{ overview.last_sync_time || '启动已自动触发' }}
+            </span>
+            <span class="text-xs px-2 py-0.5 rounded-full font-medium" :class="syncState.last_sync_error ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'">
+              {{ syncState.last_sync_error ? '异常' : '正常' }}
+            </span>
+          </div>
+          <p class="mt-1 text-xs text-slate-400 truncate" :title="syncState.last_sync_error || '定时任务每 30 分钟轮询'">
+            {{ syncState.last_sync_error || '定时轮询正常运行' }}
+          </p>
+        </div>
+      </section>
+
+      <!-- 搜索过滤与空间列表 -->
+      <section class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <!-- 搜索与筛选工具栏 -->
+        <div class="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div class="relative flex-1 max-w-md">
+            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+              </svg>
+            </div>
+            <input 
+              v-model="searchKeyword" 
+              type="text" 
+              placeholder="按部门名称、空间 ID、部门编码搜索..." 
+              class="block w-full pl-9 pr-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 bg-slate-50 placeholder-slate-400">
+          </div>
+
+          <div class="flex items-center space-x-2">
+            <div class="flex rounded-lg p-0.5 bg-slate-100 text-xs">
+              <button 
+                @click="filterStatus = 'all'" 
+                :class="filterStatus === 'all' ? 'bg-white shadow-sm font-semibold text-slate-900' : 'text-slate-600 hover:text-slate-900'"
+                class="px-2.5 py-1 rounded-md transition-all">
+                全部 ({{ spaces.length }})
+              </button>
+              <button 
+                @click="filterStatus = 'model_issue'" 
+                :class="filterStatus === 'model_issue' ? 'bg-white shadow-sm font-semibold text-red-600' : 'text-slate-600 hover:text-red-600'"
+                class="px-2.5 py-1 rounded-md transition-all">
+                模型缺失 ({{ countModelIssue }})
+              </button>
+              <button 
+                @click="filterStatus = 'storage_issue'" 
+                :class="filterStatus === 'storage_issue' ? 'bg-white shadow-sm font-semibold text-amber-600' : 'text-slate-600 hover:text-amber-600'"
+                class="px-2.5 py-1 rounded-md transition-all">
+                存储未绑 ({{ countStorageIssue }})
+              </button>
+              <button 
+                @click="filterStatus = 'no_admin'" 
+                :class="filterStatus === 'no_admin' ? 'bg-white shadow-sm font-semibold text-purple-600' : 'text-slate-600 hover:text-purple-600'"
+                class="px-2.5 py-1 rounded-md transition-all">
+                未设主管 ({{ countNoAdmin }})
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 空间表格 -->
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-200 text-left text-xs">
+            <thead class="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold">
+              <tr>
+                <th scope="col" class="py-3 px-4 w-28">空间 ID</th>
+                <th scope="col" class="py-3 px-4">部门空间名称 / 层级路径</th>
+                <th scope="col" class="py-3 px-4 w-40">LLM 模型同步</th>
+                <th scope="col" class="py-3 px-4 w-40">存储引擎状态</th>
+                <th scope="col" class="py-3 px-4 w-52">空间管理员 (Admin)</th>
+                <th scope="col" class="py-3 px-4 w-24 text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 bg-white">
+              <tr v-if="filteredSpaces.length === 0">
+                <td colspan="6" class="py-12 text-center text-slate-400">
+                  没有找到符合条件的空间配置
+                </td>
+              </tr>
+              <tr v-for="space in filteredSpaces" :key="space.id" class="hover:bg-slate-50/75 transition-colors">
+                <!-- 空间 ID -->
+                <td class="py-3.5 px-4 font-mono font-bold text-slate-900">
+                  <div class="flex items-center space-x-1.5">
+                    <span :class="space.id === overview.root_tenant_id ? 'text-indigo-600' : 'text-slate-700'">{{ space.id }}</span>
+                    <button 
+                      v-if="space.id === overview.root_tenant_id" 
+                      @click="openRootConfigDrawer"
+                      class="px-1.5 py-0.2 rounded text-[10px] bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold border border-indigo-200 transition-colors cursor-pointer"
+                      title="点击配置母空间基准">
+                      母空间 ⚙️
+                    </button>
+                  </div>
+                </td>
+
+                <!-- 部门名称与层级 -->
+                <td class="py-3.5 px-4">
+                  <div class="font-medium text-slate-900 text-sm flex items-center space-x-2">
+                    <span>{{ space.name }}</span>
+                    <span v-if="space.department_code" class="text-[11px] text-slate-400 font-mono font-normal">#{{ space.department_code }}</span>
+                  </div>
+                  <div class="text-[11px] text-slate-400 mt-0.5 truncate max-w-md" :title="space.description">
+                    {{ space.description || '无层级描述' }}
+                  </div>
+                </td>
+
+                <!-- 模型同步 -->
+                <td class="py-3.5 px-4">
+                  <div v-if="space.models_count >= space.expected_models_count" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <span class="badge-dot bg-emerald-500"></span>
+                    {{ space.models_count }}/{{ space.expected_models_count }} 模型已同步
+                  </div>
+                  <div v-else class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-50 text-red-700 border border-red-200">
+                    <span class="badge-dot bg-red-500"></span>
+                    仅 {{ space.models_count }} 个 (缺 {{ space.expected_models_count - space.models_count }})
+                  </div>
+                </td>
+
+                <!-- 存储引擎 -->
+                <td class="py-3.5 px-4">
+                  <div class="space-y-1">
+                    <div v-if="space.has_minio_storage" class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      <span class="badge-dot bg-indigo-500"></span>
+                      MinIO 默认
+                    </div>
+                    <div v-else class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                      <span class="badge-dot bg-amber-500"></span>
+                      未绑定 MinIO
+                    </div>
+                    <div v-if="space.has_local_storage" class="text-[10px] text-slate-400">
+                      + Local 兼容别名
+                    </div>
+                  </div>
+                </td>
+
+                <!-- 管理员 -->
+                <td class="py-3.5 px-4">
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <span 
+                      v-for="adm in (space.admins || [])" 
+                      :key="adm.id"
+                      class="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-800 border border-slate-200"
+                      :title="adm.email">
+                      👤 {{ adm.username }}
+                    </span>
+                    <span v-if="!space.admins || space.admins.length === 0" class="text-slate-400 italic text-[11px]">
+                      暂无主管
+                    </span>
+                    <button 
+                      @click="openAdminModal(space)"
+                      class="text-indigo-600 hover:text-indigo-800 p-0.5 rounded hover:bg-indigo-50 transition-colors"
+                      title="添加或变更管理员">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </td>
+
+                <!-- 操作按钮 -->
+                <td class="py-3.5 px-4 text-right">
+                  <div class="flex items-center justify-end space-x-2">
+                    <button 
+                      @click="syncSingleSpace(space)" 
+                      :disabled="syncingSpaceId === space.id"
+                      class="inline-flex items-center px-2 py-1 border border-slate-300 shadow-sm text-[11px] font-medium rounded text-slate-700 bg-white hover:bg-slate-50 focus:outline-none transition-colors disabled:opacity-50">
+                      <svg v-if="syncingSpaceId === space.id" class="w-3 h-3 mr-1 animate-spin text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                      </svg>
+                      同步配置
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- 管理员配置弹窗 Modal -->
+    <div v-if="activeSpace" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+      <div class="bg-white rounded-xl shadow-xl border border-slate-200 max-w-lg w-full overflow-hidden transition-all">
+        <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+          <div>
+            <h3 class="text-sm font-bold text-slate-900">配置空间管理员 (Admin)</h3>
+            <p class="text-xs text-slate-500 mt-0.5">空间: {{ activeSpace.name }} (ID: {{ activeSpace.id }})</p>
+          </div>
+          <button @click="closeAdminModal" class="text-slate-400 hover:text-slate-600">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+
+        <div class="p-5 space-y-4">
+          <!-- 现任管理员列表 -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">现任空间管理员</label>
+            <div class="flex flex-wrap gap-2">
+              <div 
+                v-for="adm in (activeSpace.admins || [])" 
+                :key="adm.id"
+                class="inline-flex items-center px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs">
+                <span>{{ adm.username }}</span>
+                <span class="text-slate-400 text-[10px] ml-1">({{ adm.email }})</span>
+                <button 
+                  @click="removeAdmin(adm.id)" 
+                  class="ml-2 text-indigo-400 hover:text-red-600 transition-colors"
+                  title="撤销该管理员权限">
+                  &times;
+                </button>
+              </div>
+              <div v-if="!activeSpace.admins || activeSpace.admins.length === 0" class="text-xs text-slate-400 italic">
+                当前空间尚未设置专属管理员
+              </div>
+            </div>
+          </div>
+
+          <hr class="border-slate-100">
+
+          <!-- 搜索并新增管理员 -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1.5 uppercase tracking-wider">搜索员工并添加为管理员</label>
+            <div class="flex space-x-2">
+              <input 
+                v-model="userSearchKeyword" 
+                @keyup.enter="searchUsers"
+                type="text" 
+                placeholder="输入员工姓名、工号、邮箱或手机号..." 
+                class="flex-1 px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+              <button 
+                @click="searchUsers" 
+                :disabled="searchingUsers"
+                class="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-medium rounded-lg transition-colors">
+                {{ searchingUsers ? '搜索中...' : '搜索' }}
+              </button>
+            </div>
+
+            <!-- 搜索结果列表 -->
+            <div class="mt-3 max-h-48 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-lg">
+              <div v-if="userSearchResults.length === 0" class="p-3 text-center text-xs text-slate-400">
+                {{ userSearchKeyword ? '未找到匹配员工' : '请输入关键字后点击搜索' }}
+              </div>
+              <div 
+                v-for="u in userSearchResults" 
+                :key="u.id" 
+                class="p-2.5 flex items-center justify-between hover:bg-slate-50 transition-colors text-xs">
+                <div>
+                  <div class="font-medium text-slate-900">{{ u.username }}</div>
+                  <div class="text-[11px] text-slate-400">{{ u.email }}</div>
+                </div>
+                <button 
+                  @click="addAdmin(u.id)" 
+                  :disabled="isAlreadyAdmin(u.id)"
+                  class="px-2.5 py-1 text-xs rounded-md font-medium transition-colors"
+                  :class="isAlreadyAdmin(u.id) ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700'">
+                  {{ isAlreadyAdmin(u.id) ? '已是管理' : '设为管理员' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+          <button @click="closeAdminModal" class="px-3 py-1.5 bg-white border border-slate-300 text-xs font-medium rounded-lg text-slate-700 hover:bg-slate-50">
+            完成
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 母空间基准配置抽屉遮罩 -->
+    <div 
+      v-if="showRootDrawer" 
+      class="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm transition-opacity"
+      @click="closeRootDrawer">
+    </div>
+
+    <!-- 母空间基准配置抽屉 -->
+    <div 
+      v-if="showRootDrawer" 
+      class="fixed inset-y-0 right-0 max-w-3xl w-full bg-white shadow-2xl z-50 flex flex-col border-l border-slate-200">
+      
+      <!-- 抽屉头部 -->
+      <div class="px-6 py-5 border-b border-slate-200 bg-slate-50 flex items-start justify-between">
+        <div>
+          <div class="flex items-center space-x-2">
+            <span class="text-xl">⚙️</span>
+            <h2 class="text-base font-bold text-slate-900">
+              母空间基准配置 (ID: {{ rootConfig.tenant_id || 10001 }} · {{ rootConfig.name || '本来生活' }})
+            </h2>
+            <span class="px-2 py-0.5 rounded text-[11px] bg-indigo-100 text-indigo-700 font-semibold border border-indigo-200">
+              全局基准模板
+            </span>
+          </div>
+          <p class="text-xs text-slate-500 mt-1 leading-relaxed">
+            此处维护的模型与存储是全量 63+ 个部门空间的配置模板与基准源。更新后可一键广播下发至所有子空间。
+          </p>
+        </div>
+        <button @click="closeRootDrawer" class="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-200/50 transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Tab 切换栏 -->
+      <div class="flex border-b border-slate-200 bg-white px-6">
+        <button 
+          @click="activeRootTab = 'models'"
+          class="py-3 px-4 text-xs font-semibold border-b-2 flex items-center space-x-2 transition-colors"
+          :class="activeRootTab === 'models' ? 'border-indigo-600 text-indigo-600 bg-indigo-50/40' : 'border-transparent text-slate-500 hover:text-slate-700'">
+          <span>🤖 LLM 模型基准配置 (Models)</span>
+          <span class="px-1.5 py-0.2 rounded-full text-[10px]" :class="activeRootTab === 'models' ? 'bg-indigo-100 text-indigo-700 font-bold' : 'bg-slate-100 text-slate-500'">
+            {{ (rootConfig.models || []).length }}
+          </span>
+        </button>
+        <button 
+          @click="activeRootTab = 'storage'"
+          class="py-3 px-4 text-xs font-semibold border-b-2 flex items-center space-x-2 transition-colors"
+          :class="activeRootTab === 'storage' ? 'border-indigo-600 text-indigo-600 bg-indigo-50/40' : 'border-transparent text-slate-500 hover:text-slate-700'">
+          <span>📦 MinIO 存储基准配置 (Storage)</span>
+          <span class="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-100 text-slate-600 font-mono">
+            MinIO
+          </span>
+        </button>
+        <button 
+          @click="activeRootTab = 'sandbox'"
+          class="py-3 px-4 text-xs font-semibold border-b-2 flex items-center space-x-2 transition-colors"
+          :class="activeRootTab === 'sandbox' ? 'border-indigo-600 text-indigo-600 bg-indigo-50/40' : 'border-transparent text-slate-500 hover:text-slate-700'">
+          <span>🛠️ 沙箱环境基准配置 (Sandbox)</span>
+          <span class="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-100 text-slate-600 font-mono">
+            Docker
+          </span>
+        </button>
+      </div>
+
+      <!-- 抽屉滚动内容区域 -->
+      <div class="flex-1 overflow-y-auto p-6 space-y-4">
+        <!-- 加载中状态 -->
+        <div v-if="loadingRootConfig" class="py-24 text-center text-slate-400">
+          <svg class="w-8 h-8 mx-auto animate-spin text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+          </svg>
+          <p class="mt-2 text-xs">正在读取母空间基准配置...</p>
+        </div>
+
+        <!-- Tab 1: LLM 模型基准配置 -->
+        <div v-else-if="activeRootTab === 'models'" class="space-y-4">
+          <div class="flex items-center justify-between">
+            <div class="text-xs text-slate-500">
+              母空间维护的基准模型将作为全量子空间的同步模板源（涵盖知识问答、嵌入与重排）。
+            </div>
+            <button 
+              @click="openAddModelModal"
+              class="inline-flex items-center px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg shadow-sm transition-colors">
+              <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+              </svg>
+              ➕ 添加新模型
+            </button>
+          </div>
+
+          <!-- 模型卡片列表 -->
+          <div v-if="!rootConfig.models || rootConfig.models.length === 0" class="py-12 text-center text-slate-400 border-2 border-dashed border-slate-200 rounded-xl">
+            暂无模型配置，请点击右上角【➕ 添加新模型】
+          </div>
+          <div v-else class="space-y-3">
+            <div 
+              v-for="(m, idx) in rootConfig.models" 
+              :key="m.id || idx"
+              class="bg-white border border-slate-200 hover:border-indigo-300 rounded-xl p-4 shadow-sm transition-all">
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center space-x-2 flex-wrap gap-y-1">
+                    <span class="font-bold text-sm text-slate-900 font-mono">{{ m.name }}</span>
+                    <span v-if="m.display_name && m.display_name !== m.name" class="text-xs text-slate-500">
+                      ({{ m.display_name }})
+                    </span>
+                    <!-- 类型标签 -->
+                    <span 
+                      class="px-2 py-0.5 rounded text-[10px] font-semibold border"
+                      :class="{
+                        'bg-indigo-50 text-indigo-700 border-indigo-200': m.type === 'KnowledgeQA',
+                        'bg-emerald-50 text-emerald-700 border-emerald-200': m.type === 'Embedding',
+                        'bg-amber-50 text-amber-700 border-amber-200': m.type === 'Rerank',
+                        'bg-slate-50 text-slate-600 border-slate-200': !['KnowledgeQA', 'Embedding', 'Rerank'].includes(m.type)
+                      }">
+                      {{ m.type === 'KnowledgeQA' ? '问答推理 (KnowledgeQA)' : (m.type === 'Embedding' ? '向量嵌入 (Embedding)' : (m.type === 'Rerank' ? '结果重排 (Rerank)' : m.type)) }}
+                    </span>
+                    <!-- 默认标记 -->
+                    <span v-if="m.is_default" class="px-1.5 py-0.2 rounded text-[10px] bg-amber-50 text-amber-700 font-semibold border border-amber-200">
+                      ⭐ 默认模型
+                    </span>
+                    <!-- Provider 标签 -->
+                    <span class="px-1.5 py-0.2 rounded text-[10px] bg-slate-100 text-slate-600 font-mono">
+                      {{ m.provider || 'generic' }}
+                    </span>
+                  </div>
+
+                  <div class="mt-2 text-xs text-slate-500 space-y-1">
+                    <div class="flex items-center space-x-1.5 truncate font-mono text-[11px]">
+                      <span class="text-slate-400 shrink-0">Base URL:</span>
+                      <span class="text-slate-700 truncate" :title="m.base_url">{{ m.base_url || '未配置' }}</span>
+                    </div>
+                    <div class="flex items-center space-x-1.5 text-[11px]">
+                      <span class="text-slate-400 shrink-0">API Key:</span>
+                      <span class="font-mono text-slate-600">{{ m.api_key_masked || (m.api_key ? '••••已输入' : '未配置') }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 操作按钮 -->
+                <div class="flex items-center space-x-1.5 shrink-0">
+                  <button 
+                    @click="openEditModelModal(m, idx)"
+                    class="px-2.5 py-1 text-xs font-medium rounded-lg text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors">
+                    编辑
+                  </button>
+                  <button 
+                    @click="deleteModel(idx)"
+                    class="px-2.5 py-1 text-xs font-medium rounded-lg text-red-600 bg-red-50 hover:bg-red-100 transition-colors">
+                    删除
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: MinIO 存储基准配置 -->
+        <div v-else-if="activeRootTab === 'storage'" class="space-y-4">
+          <div class="p-3.5 bg-indigo-50/60 border border-indigo-100 rounded-lg text-xs text-indigo-900 leading-relaxed">
+            <div class="font-bold flex items-center mb-1">
+              <span class="mr-1.5">💡</span> 全局 MinIO 存储基准说明
+            </div>
+            全量 63+ 个部门空间默认共享此 MinIO 对象存储，用于文档原文、切片附件及解析产物存储。保存并广播后将同步覆盖至所有子空间。
+          </div>
+
+          <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <!-- Endpoint -->
+              <div class="sm:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">MinIO Endpoint (服务地址)</label>
+                <input 
+                  v-model="storageForm.endpoint" 
+                  type="text" 
+                  placeholder="例如: minio:9000 或 s3.example.com" 
+                  class="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+                <p class="text-[11px] text-slate-400 mt-1">集群内部通信地址或外部 MinIO/S3 访问端点</p>
+              </div>
+
+              <!-- Bucket Name -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Bucket Name (存储桶名称)</label>
+                <input 
+                  v-model="storageForm.bucket_name" 
+                  type="text" 
+                  placeholder="例如: weknora" 
+                  class="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+              </div>
+
+              <!-- Path Prefix -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Path Prefix (存储根路径前缀)</label>
+                <input 
+                  v-model="storageForm.path_prefix" 
+                  type="text" 
+                  placeholder="例如: weknora/" 
+                  class="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+              </div>
+
+              <!-- Access Key ID -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Access Key ID</label>
+                <input 
+                  v-model="storageForm.access_key_id" 
+                  type="text" 
+                  placeholder="留空或输入掩码保持不变，输入新值替换" 
+                  class="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+                <p class="text-[11px] text-slate-400 mt-1">若显示掩码（含*）保存时自动保留当前值</p>
+              </div>
+
+              <!-- Secret Access Key -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Secret Access Key</label>
+                <input 
+                  v-model="storageForm.secret_access_key" 
+                  type="password" 
+                  placeholder="留空或输入掩码保持不变，输入新密钥将自动 AES 加密" 
+                  class="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+                <p class="text-[11px] text-slate-400 mt-1">留空或保持掩码不变；输入新值将自动 AES 加密入库</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: 沙箱环境基准配置 -->
+        <div v-else-if="activeRootTab === 'sandbox'" class="space-y-4">
+          <div class="p-3.5 bg-indigo-50/60 border border-indigo-100 rounded-lg text-xs text-indigo-900 leading-relaxed">
+            <div class="font-bold flex items-center mb-1">
+              <span class="mr-1.5">💡</span> 全局沙箱环境基准说明
+            </div>
+            母空间维护的代码执行沙箱环境基准，广播下发时将安全同步至全量部门空间。对于已有沙箱配置的子空间（如技术交付中心等），系统将自动保留其已有沙箱 ID，平滑更新镜像与资源配额，确保业务智能体稳定不中断。
+          </div>
+
+          <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <!-- 沙箱类型 -->
+              <div class="sm:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">沙箱类型 (Sandbox Type)</label>
+                <div class="flex items-center space-x-2">
+                  <input 
+                    v-model="sandboxForm.sandbox_type" 
+                    type="text" 
+                    disabled 
+                    class="w-full px-3 py-2 text-xs border border-slate-200 bg-slate-50 text-slate-500 rounded-lg font-mono cursor-not-allowed">
+                  <span class="px-2 py-1 bg-emerald-50 text-emerald-700 text-[11px] font-semibold rounded-md border border-emerald-200 whitespace-nowrap">
+                    🐳 Docker 容器隔离
+                  </span>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-1">当前固定支持 Docker 容器沙箱隔离执行代码与工具调用</p>
+              </div>
+
+              <!-- 容器镜像 -->
+              <div class="sm:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">
+                  容器镜像 (Container Image) <span class="text-red-500">*</span>
+                </label>
+                <input 
+                  v-model="sandboxForm.image" 
+                  type="text" 
+                  placeholder="wechatopenai/weknora-sandbox:latest" 
+                  class="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+                <p class="text-[11px] text-slate-400 mt-1">代码运行环境镜像名称及 Tag（例如: wechatopenai/weknora-sandbox:latest）</p>
+              </div>
+
+              <!-- CPU 配额 -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">CPU 配额 (核数)</label>
+                <div class="relative">
+                  <input 
+                    v-model.number="sandboxForm.cpu_limit" 
+                    type="number" 
+                    step="0.5" 
+                    min="0" 
+                    placeholder="2" 
+                    class="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono pr-12">
+                  <span class="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-slate-400 pointer-events-none">Cores</span>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-1">单个沙箱容器允许使用的最大 CPU 核心数 (步进 0.5)</p>
+              </div>
+
+              <!-- 内存上限 -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">内存上限 (MB)</label>
+                <div class="relative">
+                  <input 
+                    v-model.number="sandboxForm.memory_limit_mb" 
+                    type="number" 
+                    step="256" 
+                    min="0" 
+                    placeholder="2048" 
+                    class="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono pr-10">
+                  <span class="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-slate-400 pointer-events-none">MB</span>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-1">沙箱容器最大内存配额（建议 2048 MB）</p>
+              </div>
+
+              <!-- 执行超时 -->
+              <div class="sm:col-span-2">
+                <label class="block text-xs font-semibold text-slate-700 mb-1">执行超时时间 (秒)</label>
+                <div class="relative">
+                  <input 
+                    v-model.number="sandboxForm.default_timeout_sec" 
+                    type="number" 
+                    step="1" 
+                    min="0" 
+                    placeholder="120" 
+                    class="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono pr-12">
+                  <span class="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-slate-400 pointer-events-none">秒 (s)</span>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-1">单次代码或工具执行允许的最长运行时间（默认 120 秒）</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 抽屉底部固定操作栏 -->
+      <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+        <button 
+          @click="closeRootDrawer" 
+          class="px-3.5 py-2 bg-white border border-slate-300 text-xs font-medium rounded-lg text-slate-700 hover:bg-slate-100 transition-colors">
+          关闭
+        </button>
+        <div class="flex items-center space-x-3">
+          <button 
+            @click="saveCurrentTab" 
+            :disabled="savingRoot || broadcastingRoot"
+            class="inline-flex items-center px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-medium rounded-lg shadow-sm transition-colors disabled:opacity-50">
+            <svg v-if="savingRoot" class="w-3.5 h-3.5 mr-1.5 animate-spin text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            {{ savingRoot ? '保存中...' : '仅保存母空间' }}
+          </button>
+          <button 
+            @click="broadcastRootConfig" 
+            :disabled="savingRoot || broadcastingRoot"
+            class="inline-flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg shadow-sm shadow-indigo-200 transition-colors disabled:opacity-50">
+            <svg v-if="broadcastingRoot" class="w-3.5 h-3.5 mr-1.5 animate-spin text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span v-else class="mr-1">💾</span>
+            {{ broadcastingRoot ? '广播下发中...' : '保存并广播至全量子空间' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 添加/编辑模型子弹窗 Modal -->
+    <div v-if="showModelModal" class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+      <div class="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden transition-all">
+        <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+          <div class="flex items-center space-x-2">
+            <span class="text-base">🤖</span>
+            <h3 class="text-sm font-bold text-slate-900">
+              {{ editingModelIndex === -1 ? '添加母空间基准模型' : '编辑母空间基准模型' }}
+            </h3>
+          </div>
+          <button @click="showModelModal = false" class="text-slate-400 hover:text-slate-600">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+
+        <div class="p-5 space-y-3.5 max-h-[75vh] overflow-y-auto">
+          <!-- 模型 ID -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">模型标识 (ID)</label>
+            <input 
+              v-model="editingModel.id" 
+              :disabled="editingModelIndex >= 0"
+              type="text" 
+              placeholder="留空将自动生成 UUID" 
+              class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono disabled:bg-slate-100 disabled:text-slate-400">
+            <p class="text-[10px] text-slate-400 mt-0.5" v-if="editingModelIndex >= 0">已保存模型 ID 不可修改</p>
+          </div>
+
+          <!-- 模型名称 & 显示名称 -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">
+                模型名称 (Name) <span class="text-red-500">*</span>
+              </label>
+              <input 
+                v-model="editingModel.name" 
+                type="text" 
+                placeholder="如: GLM-5.3-Flash" 
+                class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">显示名称 (Display Name)</label>
+              <input 
+                v-model="editingModel.display_name" 
+                type="text" 
+                placeholder="如: 智谱 GLM-5.3 Flash" 
+                class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+            </div>
+          </div>
+
+          <!-- 模型类型 & Provider -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">
+                模型类型 (Type) <span class="text-red-500">*</span>
+              </label>
+              <select 
+                v-model="editingModel.type" 
+                class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 bg-white">
+                <option value="KnowledgeQA">KnowledgeQA (知识库问答推理)</option>
+                <option value="Embedding">Embedding (向量切片嵌入)</option>
+                <option value="Rerank">Rerank (检索结果重排序)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">Provider (提供方)</label>
+              <input 
+                v-model="editingModel.provider" 
+                type="text" 
+                placeholder="默认: generic" 
+                class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+            </div>
+          </div>
+
+          <!-- Base URL -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">Base URL (接口调用基地址)</label>
+            <input 
+              v-model="editingModel.base_url" 
+              type="text" 
+              placeholder="如: https://zhenze-huhehaote.cmecloud.cn/v1" 
+              class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+          </div>
+
+          <!-- API Key -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-700 mb-1">API Key</label>
+            <input 
+              v-model="editingModel.api_key" 
+              type="password" 
+              placeholder="留空或输入掩码保持不变，输入新密钥将自动 AES 加密" 
+              class="w-full px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+            <p class="text-[11px] text-slate-400 mt-1">留空或输入掩码（含*）保持原有密钥不变；输入明文密钥将自动 AES 加密入库</p>
+          </div>
+
+          <!-- 是否默认模型 -->
+          <div class="pt-1">
+            <label class="inline-flex items-center space-x-2 cursor-pointer">
+              <input 
+                v-model="editingModel.is_default" 
+                type="checkbox" 
+                class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4">
+              <span class="text-xs font-medium text-slate-800">设为该类型下的默认模型 (is_default)</span>
+            </label>
+            <p class="text-[11px] text-slate-400 ml-6">各子空间在进行问答或向量处理时将优先选用默认模型</p>
+          </div>
+        </div>
+
+        <!-- Modal 底部按钮 -->
+        <div class="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end space-x-2">
+          <button 
+            @click="showModelModal = false" 
+            class="px-3 py-1.5 bg-white border border-slate-300 text-xs font-medium rounded-lg text-slate-700 hover:bg-slate-50 transition-colors">
+            取消
+          </button>
+          <button 
+            @click="saveEditingModel" 
+            class="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg shadow-sm transition-colors">
+            暂存模型
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 底部 Toast 通知 -->
+    <div 
+      v-if="toast.show" 
+      class="fixed bottom-5 right-5 z-[70] flex items-center space-x-2 px-4 py-2.5 rounded-lg shadow-xl text-xs font-medium text-white transition-all transform ease-out duration-300"
+      :class="{
+        'bg-red-600': toast.type === 'error',
+        'bg-emerald-600': toast.type === 'success',
+        'bg-slate-900': toast.type === 'info' || !toast.type
+      }">
+      <span v-if="toast.type === 'success'">✅</span>
+      <span v-else-if="toast.type === 'error'">❌</span>
+      <span v-else>ℹ️</span>
+      <span>{{ toast.message }}</span>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const loading = ref(false);
+        const overview = ref({});
+        const syncState = ref({});
+        const spaces = ref([]);
+        const searchKeyword = ref('');
+        const filterStatus = ref('all');
+        const syncingSpaceId = ref(null);
+
+        // 管理员配置弹窗状态
+        const activeSpace = ref(null);
+        const userSearchKeyword = ref('');
+        const searchingUsers = ref(false);
+        const userSearchResults = ref([]);
+
+        // Toast 状态
+        const toast = ref({ show: false, message: '', type: 'info' });
+        let toastTimer = null;
+        const showToast = (message, type = 'info') => {
+          if (toastTimer) clearTimeout(toastTimer);
+          toast.value = { show: true, message, type };
+          toastTimer = setTimeout(() => { toast.value.show = false; }, 3000);
+        };
+
+        // 母空间基准配置响应式状态
+        const showRootDrawer = ref(false);
+        const activeRootTab = ref('models'); // 'models' | 'storage' | 'sandbox'
+        const rootConfig = ref({ tenant_id: 10001, name: '', description: '', models: [], storage: {}, sandbox: {} });
+        const loadingRootConfig = ref(false);
+        const savingRoot = ref(false);
+        const broadcastingRoot = ref(false);
+        const deletedModelIds = ref([]);
+        const storageForm = ref({
+          endpoint: '',
+          bucket_name: '',
+          path_prefix: '',
+          access_key_id: '',
+          secret_access_key: ''
+        });
+        const sandboxForm = ref({
+          name: '默认Docker沙箱',
+          description: '',
+          sandbox_type: 'docker',
+          image: 'wechatopenai/weknora-sandbox:latest',
+          cpu_limit: 2,
+          memory_limit_mb: 2048,
+          default_timeout_sec: 120
+        });
+
+        // 模型添加/编辑弹窗状态
+        const showModelModal = ref(false);
+        const editingModelIndex = ref(-1);
+        const editingModel = ref({
+          id: '',
+          name: '',
+          display_name: '',
+          type: 'KnowledgeQA',
+          source: 'remote',
+          provider: 'generic',
+          base_url: '',
+          api_key: '',
+          is_default: false
+        });
+
+        // 获取大盘与空间列表
+        const fetchData = async () => {
+          loading.value = true;
+          try {
+            const [overviewRes, spacesRes] = await Promise.all([
+              fetch('/admin/api/overview').then(r => r.json()),
+              fetch('/admin/api/spaces').then(r => r.json())
+            ]);
+
+            if (overviewRes.code === 0) {
+              overview.value = overviewRes.data || {};
+              syncState.value = overviewRes.sync_state || {};
+            }
+            if (spacesRes.code === 0) {
+              spaces.value = spacesRes.data || [];
+            }
+          } catch (err) {
+            showToast('获取数据失败: ' + err.message, 'error');
+          } finally {
+            loading.value = false;
+          }
+        };
+
+        // 筛选逻辑
+        const filteredSpaces = computed(() => {
+          return spaces.value.filter(space => {
+            // 关键字搜索
+            if (searchKeyword.value.trim()) {
+              const kw = searchKeyword.value.trim().toLowerCase();
+              const matchName = (space.name || '').toLowerCase().includes(kw);
+              const matchID = String(space.id).includes(kw);
+              const matchDeptCode = (space.department_code || '').toLowerCase().includes(kw);
+              if (!matchName && !matchID && !matchDeptCode) return false;
+            }
+
+            // 状态过滤
+            if (filterStatus.value === 'model_issue') {
+              return space.models_count < space.expected_models_count;
+            }
+            if (filterStatus.value === 'storage_issue') {
+              return !space.has_minio_storage;
+            }
+            if (filterStatus.value === 'no_admin') {
+              return !space.admins || space.admins.length === 0;
+            }
+            return true;
+          });
+        });
+
+        // 异常计数
+        const countModelIssue = computed(() => spaces.value.filter(s => s.models_count < s.expected_models_count).length);
+        const countStorageIssue = computed(() => spaces.value.filter(s => !s.has_minio_storage).length);
+        const countNoAdmin = computed(() => spaces.value.filter(s => !s.admins || s.admins.length === 0).length);
+
+        // 立即触发全量同步
+        const triggerSyncAll = async () => {
+          try {
+            const res = await fetch('/admin/api/sync/all', { method: 'POST' }).then(r => r.json());
+            if (res.code === 0) {
+              showToast(res.message || '全量同步已启动');
+              syncState.value.is_syncing = true;
+              setTimeout(fetchData, 2000);
+            } else {
+              showToast(res.message, 'error');
+            }
+          } catch (err) {
+            showToast('启动全量同步失败: ' + err.message, 'error');
+          }
+        };
+
+        // 单个空间同步
+        const syncSingleSpace = async (space) => {
+          syncingSpaceId.value = space.id;
+          try {
+            const res = await fetch(`/admin/api/spaces/${space.id}/sync`, { method: 'POST' }).then(r => r.json());
+            if (res.code === 0) {
+              showToast(`空间【${space.name}】配置同步成功`);
+              await fetchData();
+            } else {
+              showToast(res.message, 'error');
+            }
+          } catch (err) {
+            showToast('同步失败: ' + err.message, 'error');
+          } finally {
+            syncingSpaceId.value = null;
+          }
+        };
+
+        // 打开/关闭管理员配置弹窗
+        const openAdminModal = (space) => {
+          activeSpace.value = space;
+          userSearchKeyword.value = '';
+          userSearchResults.value = [];
+        };
+        const closeAdminModal = () => {
+          activeSpace.value = null;
+          userSearchResults.value = [];
+        };
+
+        // 搜索员工
+        const searchUsers = async () => {
+          if (!userSearchKeyword.value.trim()) return;
+          searchingUsers.value = true;
+          try {
+            const res = await fetch(`/admin/api/users?keyword=${encodeURIComponent(userSearchKeyword.value.trim())}`).then(r => r.json());
+            if (res.code === 0) {
+              userSearchResults.value = res.data || [];
+            }
+          } catch (err) {
+            showToast('搜索员工失败', 'error');
+          } finally {
+            searchingUsers.value = false;
+          }
+        };
+
+        // 检查用户是否已是该空间管理员
+        const isAlreadyAdmin = (userId) => {
+          if (!activeSpace.value || !activeSpace.value.admins) return false;
+          return activeSpace.value.admins.some(a => a.id === userId);
+        };
+
+        // 添加管理员
+        const addAdmin = async (userId) => {
+          if (!activeSpace.value) return;
+          try {
+            const res = await fetch(`/admin/api/spaces/${activeSpace.value.id}/admins`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ user_id: userId, action: 'add' })
+            }).then(r => r.json());
+
+            if (res.code === 0) {
+              showToast('设置管理员成功');
+              await fetchData();
+              // 更新弹窗中的空间引用
+              const updated = spaces.value.find(s => s.id === activeSpace.value.id);
+              if (updated) activeSpace.value = updated;
+            } else {
+              showToast(res.message, 'error');
+            }
+          } catch (err) {
+            showToast('设置管理员失败: ' + err.message, 'error');
+          }
+        };
+
+        // 移除管理员
+        const removeAdmin = async (userId) => {
+          if (!activeSpace.value) return;
+          if (!confirm('确定要撤销该用户的管理员角色吗？')) return;
+          try {
+            const res = await fetch(`/admin/api/spaces/${activeSpace.value.id}/admins`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ user_id: userId, action: 'remove' })
+            }).then(r => r.json());
+
+            if (res.code === 0) {
+              showToast('管理员角色已撤销');
+              await fetchData();
+              const updated = spaces.value.find(s => s.id === activeSpace.value.id);
+              if (updated) activeSpace.value = updated;
+            } else {
+              showToast(res.message, 'error');
+            }
+          } catch (err) {
+            showToast('撤销管理员失败: ' + err.message, 'error');
+          }
+        };
+
+        // 获取母空间基准配置
+        const fetchRootConfig = async () => {
+          loadingRootConfig.value = true;
+          try {
+            const res = await fetch('/admin/api/root-config').then(r => r.json());
+            if (res.code === 0 && res.data) {
+              rootConfig.value = res.data;
+              if (!rootConfig.value.models) {
+                rootConfig.value.models = [];
+              }
+              deletedModelIds.value = [];
+              const s = res.data.storage || {};
+              storageForm.value = {
+                endpoint: s.endpoint || '',
+                bucket_name: s.bucket_name || '',
+                path_prefix: s.path_prefix || '',
+                access_key_id: s.access_key_masked || '',
+                secret_access_key: s.secret_key_masked || ''
+              };
+              if (res.data.sandbox) {
+                const sb = res.data.sandbox;
+                sandboxForm.value = {
+                  name: sb.name || '默认Docker沙箱',
+                  description: sb.description || '',
+                  sandbox_type: sb.sandbox_type || 'docker',
+                  image: sb.image || 'wechatopenai/weknora-sandbox:latest',
+                  cpu_limit: sb.cpu_limit !== undefined ? sb.cpu_limit : 2,
+                  memory_limit_mb: sb.memory_limit_mb !== undefined ? sb.memory_limit_mb : 2048,
+                  default_timeout_sec: sb.default_timeout_sec !== undefined ? sb.default_timeout_sec : 120
+                };
+              }
+            } else {
+              showToast(res.message || '获取母空间配置失败', 'error');
+            }
+          } catch (err) {
+            showToast('获取母空间配置异常: ' + err.message, 'error');
+          } finally {
+            loadingRootConfig.value = false;
+          }
+        };
+
+        // 打开/关闭母空间抽屉
+        const openRootConfigDrawer = () => {
+          showRootDrawer.value = true;
+          fetchRootConfig();
+        };
+        const closeRootDrawer = () => {
+          if (savingRoot.value || broadcastingRoot.value) return;
+          showRootDrawer.value = false;
+          showModelModal.value = false;
+        };
+
+        // 打开添加新模型弹窗
+        const openAddModelModal = () => {
+          editingModelIndex.value = -1;
+          editingModel.value = {
+            id: '',
+            name: '',
+            display_name: '',
+            type: 'KnowledgeQA',
+            source: 'remote',
+            provider: 'generic',
+            base_url: 'https://zhenze-huhehaote.cmecloud.cn/v1',
+            api_key: '',
+            is_default: false
+          };
+          showModelModal.value = true;
+        };
+
+        // 打开编辑模型弹窗
+        const openEditModelModal = (model, index) => {
+          editingModelIndex.value = index;
+          editingModel.value = {
+            id: model.id || '',
+            name: model.name || '',
+            display_name: model.display_name || '',
+            type: model.type || 'KnowledgeQA',
+            source: model.source || 'remote',
+            provider: model.provider || 'generic',
+            base_url: model.base_url || '',
+            api_key: model.api_key_masked || '',
+            is_default: !!model.is_default
+          };
+          showModelModal.value = true;
+        };
+
+        // 暂存编辑/新增的模型
+        const saveEditingModel = () => {
+          if (!editingModel.value.name.trim()) {
+            showToast('请输入模型名称', 'error');
+            return;
+          }
+          if (!editingModel.value.type) {
+            showToast('请选择模型类型', 'error');
+            return;
+          }
+
+          const modelData = {
+            id: editingModel.value.id.trim(),
+            name: editingModel.value.name.trim(),
+            display_name: editingModel.value.display_name.trim() || editingModel.value.name.trim(),
+            type: editingModel.value.type,
+            source: editingModel.value.source || 'remote',
+            provider: editingModel.value.provider.trim() || 'generic',
+            base_url: editingModel.value.base_url.trim(),
+            api_key: editingModel.value.api_key.trim(),
+            api_key_masked: editingModel.value.api_key.trim() ? 
+              (editingModel.value.api_key.includes('*') ? editingModel.value.api_key : (editingModel.value.api_key.slice(0, 4) + '****' + editingModel.value.api_key.slice(-4))) : 
+              (editingModelIndex.value >= 0 ? rootConfig.value.models[editingModelIndex.value].api_key_masked : ''),
+            is_default: !!editingModel.value.is_default,
+            status: 'active'
+          };
+
+          // 若设为默认模型，自动清除同类型其他模型的默认标记
+          if (modelData.is_default) {
+            rootConfig.value.models.forEach((m, idx) => {
+              if (m.type === modelData.type && idx !== editingModelIndex.value) {
+                m.is_default = false;
+              }
+            });
+          }
+
+          if (editingModelIndex.value === -1) {
+            rootConfig.value.models.push(modelData);
+          } else {
+            rootConfig.value.models[editingModelIndex.value] = {
+              ...rootConfig.value.models[editingModelIndex.value],
+              ...modelData
+            };
+          }
+
+          showModelModal.value = false;
+          showToast('模型已更新至列表，点击底部保存生效', 'info');
+        };
+
+        // 从列表中删除模型
+        const deleteModel = (index) => {
+          const m = rootConfig.value.models[index];
+          if (!confirm(`确定要删除模型【${m.name}】吗？`)) return;
+          if (m.id) {
+            deletedModelIds.value.push(m.id);
+          }
+          rootConfig.value.models.splice(index, 1);
+          showToast(`已删除模型【${m.name}】，点击底部保存生效`, 'info');
+        };
+
+        // 保存母空间模型配置
+        const saveRootModels = async () => {
+          savingRoot.value = true;
+          try {
+            const modelsPayload = rootConfig.value.models.map(m => ({
+              id: m.id || '',
+              name: m.name,
+              display_name: m.display_name || m.name,
+              type: m.type,
+              source: m.source || 'remote',
+              provider: m.provider || 'generic',
+              base_url: m.base_url || '',
+              api_key: m.api_key || '',
+              is_default: !!m.is_default,
+              status: m.status || 'active',
+              deleted: false
+            }));
+
+            deletedModelIds.value.forEach(id => {
+              modelsPayload.push({
+                id: id,
+                name: 'deleted',
+                type: 'KnowledgeQA',
+                deleted: true
+              });
+            });
+
+            const res = await fetch('/admin/api/root-config/models', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ models: modelsPayload })
+            }).then(r => r.json());
+
+            if (res.code === 0) {
+              showToast(res.message || '母空间模型配置保存成功', 'success');
+              deletedModelIds.value = [];
+              await fetchRootConfig();
+              await fetchData();
+              return true;
+            } else {
+              showToast(res.message || '保存模型配置失败', 'error');
+              return false;
+            }
+          } catch (err) {
+            showToast('保存模型配置异常: ' + err.message, 'error');
+            return false;
+          } finally {
+            savingRoot.value = false;
+          }
+        };
+
+        // 保存母空间 MinIO 存储配置
+        const saveRootStorage = async (silent = false) => {
+          if (!storageForm.value.endpoint || !storageForm.value.endpoint.trim()) {
+            showToast('请输入 MinIO 服务地址 (Endpoint)', 'error');
+            return false;
+          }
+          if (!storageForm.value.bucket_name || !storageForm.value.bucket_name.trim()) {
+            showToast('请输入存储桶名称 (Bucket Name)', 'error');
+            return false;
+          }
+
+          savingRoot.value = true;
+          try {
+            const res = await fetch('/admin/api/root-config/storage', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                endpoint: storageForm.value.endpoint.trim(),
+                bucket_name: storageForm.value.bucket_name.trim(),
+                path_prefix: storageForm.value.path_prefix ? storageForm.value.path_prefix.trim() : '',
+                access_key_id: storageForm.value.access_key_id || '',
+                secret_access_key: storageForm.value.secret_access_key || ''
+              })
+            }).then(r => r.json());
+
+            if (res.code === 0) {
+              if (!silent) {
+                showToast(res.message || '母空间 MinIO 存储配置保存成功', 'success');
+              }
+              await fetchRootConfig();
+              await fetchData();
+              return true;
+            } else {
+              showToast(res.message || '保存存储配置失败', 'error');
+              return false;
+            }
+          } catch (err) {
+            showToast('保存存储配置异常: ' + err.message, 'error');
+            return false;
+          } finally {
+            savingRoot.value = false;
+          }
+        };
+
+        // 保存母空间沙箱环境配置
+        const saveRootSandbox = async (silent = false) => {
+          if (!sandboxForm.value.image || !sandboxForm.value.image.trim()) {
+            showToast('请输入沙箱容器镜像 (Image)', 'error');
+            return false;
+          }
+          if (sandboxForm.value.cpu_limit < 0) {
+            showToast('CPU 配额必须大于等于 0', 'error');
+            return false;
+          }
+          if (sandboxForm.value.memory_limit_mb < 0) {
+            showToast('内存上限必须大于等于 0', 'error');
+            return false;
+          }
+          if (sandboxForm.value.default_timeout_sec < 0) {
+            showToast('超时时间必须大于等于 0', 'error');
+            return false;
+          }
+
+          savingRoot.value = true;
+          try {
+            const res = await fetch('/admin/api/root-config/sandbox', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: sandboxForm.value.name ? sandboxForm.value.name.trim() : '默认Docker沙箱',
+                description: sandboxForm.value.description ? sandboxForm.value.description.trim() : '',
+                sandbox_type: sandboxForm.value.sandbox_type || 'docker',
+                image: sandboxForm.value.image.trim(),
+                cpu_limit: Number(sandboxForm.value.cpu_limit) || 0,
+                memory_limit_mb: Number(sandboxForm.value.memory_limit_mb) || 0,
+                default_timeout_sec: Number(sandboxForm.value.default_timeout_sec) || 0
+              })
+            }).then(r => r.json());
+
+            if (res.code === 0) {
+              if (!silent) {
+                showToast(res.message || '母空间沙箱环境配置保存成功', 'success');
+              }
+              await fetchRootConfig();
+              await fetchData();
+              return true;
+            } else {
+              showToast(res.message || '保存沙箱配置失败', 'error');
+              return false;
+            }
+          } catch (err) {
+            showToast('保存沙箱配置异常: ' + err.message, 'error');
+            return false;
+          } finally {
+            savingRoot.value = false;
+          }
+        };
+
+        // 保存当前 Tab 对应的配置
+        const saveCurrentTab = async () => {
+          if (activeRootTab.value === 'models') {
+            return await saveRootModels();
+          } else if (activeRootTab.value === 'storage') {
+            return await saveRootStorage();
+          } else if (activeRootTab.value === 'sandbox') {
+            return await saveRootSandbox();
+          }
+        };
+
+        // 保存并广播至全量子空间
+        const broadcastRootConfig = async () => {
+          if (!confirm('确认要保存并广播母空间基准配置至全量 63+ 个子空间吗？\n该操作将最新模型、存储与沙箱环境配置一键下发到所有子空间。')) {
+            return;
+          }
+
+          broadcastingRoot.value = true;
+          try {
+            // 保存模型、存储与沙箱配置
+            const modelsOk = await saveRootModels();
+            if (!modelsOk) return;
+
+            const storageOk = await saveRootStorage(true);
+            if (!storageOk) return;
+
+            const sandboxOk = await saveRootSandbox(true);
+            if (!sandboxOk) return;
+
+            // 触发级联广播下发
+            const res = await fetch('/admin/api/root-config/broadcast', {
+              method: 'POST'
+            }).then(r => r.json());
+
+            if (res.code === 0) {
+              showToast(res.message || `已成功将基准配置级联广播至 ${res.count || 0} 个子空间`, 'success');
+              await fetchData();
+            } else {
+              showToast(res.message || '广播配置失败', 'error');
+            }
+          } catch (err) {
+            showToast('广播配置异常: ' + err.message, 'error');
+          } finally {
+            broadcastingRoot.value = false;
+          }
+        };
+
+        onMounted(() => {
+          fetchData();
+          // 每 30 秒自动刷新一次大盘数据
+          setInterval(fetchData, 30000);
+        });
+
+        return {
+          loading,
+          overview,
+          syncState,
+          spaces,
+          searchKeyword,
+          filterStatus,
+          filteredSpaces,
+          countModelIssue,
+          countStorageIssue,
+          countNoAdmin,
+          syncingSpaceId,
+          activeSpace,
+          userSearchKeyword,
+          searchingUsers,
+          userSearchResults,
+          toast,
+          fetchData,
+          triggerSyncAll,
+          syncSingleSpace,
+          openAdminModal,
+          closeAdminModal,
+          searchUsers,
+          isAlreadyAdmin,
+          addAdmin,
+          removeAdmin,
+
+          // 母空间基准配置响应式状态与操作
+          showRootDrawer,
+          activeRootTab,
+          rootConfig,
+          loadingRootConfig,
+          savingRoot,
+          broadcastingRoot,
+          storageForm,
+          sandboxForm,
+          showModelModal,
+          editingModelIndex,
+          editingModel,
+          openRootConfigDrawer,
+          closeRootDrawer,
+          fetchRootConfig,
+          openAddModelModal,
+          openEditModelModal,
+          saveEditingModel,
+          deleteModel,
+          saveRootModels,
+          saveRootStorage,
+          saveRootSandbox,
+          saveCurrentTab,
+          broadcastRootConfig
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

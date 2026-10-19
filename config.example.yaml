@@ -1,0 +1,44 @@
+# ==========================================
+# WeKnora TokenDance Gateway 统一配置文件
+# 所有运行参数均在此文件中集中维护
+# ==========================================
+
+# 服务监听端口
+server:
+  port: 3002
+
+# 企业微信开发者凭据
+wecom:
+  corp_id: "ww_your_corp_id"                 # 企业ID (ww打头)
+  secret: "your_app_secret"                 # 自建应用 Secret (用于换取员工登录态)
+  contact_secret: "your_contact_secret"     # 通讯录管理 Secret (用于读取部门树和员工清单)
+  agent_id: 1000002                         # 可选：仅在使用扫码组件时需要，普通OAuth免登不需要
+  redirect_uri: "https://gateway.example.com/wecom/callback"
+
+# WeKnora 平台对接配置 (与服务器运行环境完全对齐)
+weknora:
+  # 可留空或填 ""：留空时使用相对路径重定向，自动适配浏览器当前访问的域名和端口
+  # 也可填服务名（如 http://frontend）或外网完整域名
+  base_url: ""
+  # 与服务器 WeKnora-app 容器的 JWT_SECRET 保持完全一致（真实值禁止入库，运行时经环境变量注入）:
+  jwt_secret: "change-me-match-weknora-jwt-secret"
+  root_tenant_id: 10001                      # 服务器生产全员公共空间 ID (本来生活)
+  default_role: "contributor"               # 部门成员默认角色
+  leader_role: "admin"                      # 部门负责人空间角色
+
+# 数据库连接 (同一网桥下，使用容器服务名 db 直连)
+database:
+  host: "db"                                # Docker 内部网络服务名
+  port: 5432
+  user: "root"
+  password: "change-me"                     # 真实密码禁止入库，运行时经环境变量注入
+  dbname: "weknora"
+  sslmode: "disable"
+
+# 组织架构定时同步配置
+sync:
+  enable_cron: true
+  cron_schedule: "0 */30 * * *"             # 每30分钟自动全量同步一次企微组织架构
+
+# WeKnora 敏感字段 AES-256-GCM 加密密钥 (32 字节)，与 WeKnora SYSTEM_AES_KEY 对齐（真实值禁止入库）
+system_aes_key: "change-me-32-byte-hex-key"

@@ -1,0 +1,10 @@
+# 真实配置与密钥（仅保留 config.example.yaml 脱敏模板）
+config.yaml
+config.local.yaml
+
+# 构建产物
+tokendance-gateway
+tokendance-gateway-*
+
+# 系统文件
+.DS_Store
