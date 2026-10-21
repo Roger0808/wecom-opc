@@ -41,3 +41,12 @@ status: draft
 
 - Testing：见上表全 PASS。
 - PBT/Security/Resiliency：跨仓阶段（X01/X03）统一执行回填（含 property/case 数/seed、负向安全矩阵注入、故障注入证据）。
+
+## 测试环境部署证据（2026-10-21，用户授权后执行）
+
+- 备份：/data/backup-opc-integration-20261021/（dump 141MB + tar + 镜像 digest + SHA256SUMS，已验证可读）。
+- knowledge：镜像 weknora-app/ui:opc-int-001（sha256 记录在服务器证据文件）；正式库 118→132 受控迁移（副本库先行验证，chunks 行数一致）；健康/401 语义验证。
+- platform：二进制 f42850c→8b7d010（审计修复后重发，sha256 在服务器证据文件）；自有库 weknora_gateway_state（opc_platform 账号，对 weknora.chunks 读拒，隔离验证）；密钥 600 注入；/health 200、无 token 401；审计落库验证（修复后）。
+- code：opc-code-server:opc-int-001（3095→8080）；opc_code 库迁移 585~590（scratch 先行）；/healthz 200。
+- 冒烟：负向 401 矩阵正确；网关↔code 互通；日志密钥扫描 0 命中；3091-3093 服务未动。
+- 部署发现（已处置/记录）：审计 22P02（已修 8b7d010）；knowledge EXT 路由匿名探测恒 401（全局 auth 前置，fail-closed 供应态需账号复测）；compose 需 --no-deps（docker.io 不可达）；gateway /health 为静态桩（三档报告未实现，记差异）。
