@@ -15,8 +15,8 @@ type AuditEvent struct {
 	Actor     string    `gorm:"column:actor;type:varchar(128);not null;index" json:"actor"`
 	Action    string    `gorm:"column:action;type:varchar(255);not null" json:"action"`
 	Target    string    `gorm:"column:target;type:varchar(512);not null" json:"target"`
-	Before    string    `gorm:"column:before;type:text" json:"before,omitempty"`
-	After     string    `gorm:"column:after;type:text" json:"after,omitempty"`
+	Before    string    `gorm:"column:before;type:jsonb" json:"before,omitempty"`
+	After     string    `gorm:"column:after;type:jsonb" json:"after,omitempty"`
 	RequestID string    `gorm:"column:request_id;type:varchar(64);not null" json:"request_id"`
 	CreatedAt time.Time `gorm:"column:created_at;not null;index" json:"created_at"`
 }

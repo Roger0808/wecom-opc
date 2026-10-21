@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"weknora-tokendance/pkg/model"
@@ -23,6 +24,14 @@ func (s *Storage) InsertAuditEvent(ctx context.Context, event *model.AuditEvent)
 	}
 	if event.CreatedAt.IsZero() {
 		event.CreatedAt = time.Now()
+	}
+	// before/after 是 PostgreSQL jsonb 列：空串不是合法 JSON（部署实测 22P02），
+	// 统一归一为 NULL 语义的空对象。
+	if strings.TrimSpace(event.Before) == "" {
+		event.Before = "{}"
+	}
+	if strings.TrimSpace(event.After) == "" {
+		event.After = "{}"
 	}
 	return s.stateDB.WithContext(ctx).Create(event).Error
 }
