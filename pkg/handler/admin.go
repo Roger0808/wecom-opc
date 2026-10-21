@@ -2,23 +2,18 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
-	"sync"
-	"time"
 
+	"weknora-tokendance/pkg/adminauth"
 	"weknora-tokendance/pkg/model"
+	"weknora-tokendance/pkg/syncservice"
 
 	"github.com/gin-gonic/gin"
-)
-
-var (
-	syncStateLock sync.RWMutex
-	isSyncing     bool
-	lastSyncTime  time.Time
-	lastSyncErr   string
+	"github.com/google/uuid"
 )
 
 // AdminGetOverview 返回大盘统计数据
@@ -36,20 +31,9 @@ func (h *Handler) AdminGetOverview(c *gin.Context) {
 		stats.CronSchedule = "0 */30 * * *"
 	}
 
-	syncStateLock.RLock()
-	if !lastSyncTime.IsZero() {
-		stats.LastSyncTime = lastSyncTime.Format("2006-01-02 15:04:05")
-	}
-	syncStateLock.RUnlock()
-
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"data": stats,
-		"sync_state": gin.H{
-			"is_syncing":      isSyncing,
-			"last_sync_time":  stats.LastSyncTime,
-			"last_sync_error": lastSyncErr,
-		},
 	})
 }
 
@@ -71,41 +55,51 @@ func (h *Handler) AdminListSpaces(c *gin.Context) {
 	})
 }
 
-// AdminTriggerSyncAll 触发全量同步
+// AdminTriggerSyncAll 触发全量同步（H5 修复）：统一走 syncservice.Run(scope=full)，
+// 享受同步运行账本 / 持久化互斥锁 / 快照守卫 / 幂等键契约；不再走 syncer.SyncAll，
+// 也不再使用进程内 isSyncing 布尔（互斥以 sync_runs 持久化锁为准，并发触发 → 409）。
+// 同步阻塞至终态后返回 run_id 与最终状态。
 func (h *Handler) AdminTriggerSyncAll(c *gin.Context) {
-	syncStateLock.Lock()
-	if isSyncing {
-		syncStateLock.Unlock()
-		c.JSON(http.StatusConflict, gin.H{"code": -1, "message": "已有同步任务正在进行中，请勿重复触发"})
+	if h.syncService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": -1, "message": "sync service not assembled"})
 		return
 	}
-	isSyncing = true
-	syncStateLock.Unlock()
 
-	go func() {
-		defer func() {
-			syncStateLock.Lock()
-			isSyncing = false
-			lastSyncTime = time.Now()
-			syncStateLock.Unlock()
-		}()
+	triggeredBy := "admin:unknown"
+	if claims, ok := adminauth.GetClaims(c); ok && claims != nil && claims.Subject != "" {
+		triggeredBy = "admin:" + claims.Subject
+	}
 
-		log.Println("[Admin] 手动触发全量组织架构与配置同步...")
-		err := h.syncer.SyncAll(context.Background())
-		syncStateLock.Lock()
-		if err != nil {
-			lastSyncErr = err.Error()
+	// 请求断连不取消运行（运行生命周期由持久化锁/租约承载，不用请求 context 跑后台 goroutine）
+	ctx := context.WithoutCancel(c.Request.Context())
+	log.Printf("[Admin] 手动触发全量组织架构与配置同步（syncservice full run, by %s）...", triggeredBy)
+	runID, err := h.syncService.Run(ctx, string(syncservice.ScopeFull), "", "admin-sync-all|"+uuid.NewString(), triggeredBy, "rules/v1")
+	if err != nil {
+		switch {
+		case errors.Is(err, syncservice.ErrConflict):
+			c.JSON(http.StatusConflict, gin.H{"code": -1, "message": "已有同步任务正在进行中，请勿重复触发 (SYNC_RUN_CONFLICT)"})
+		case errors.Is(err, syncservice.ErrInvalidRequest):
+			c.JSON(http.StatusBadRequest, gin.H{"code": -1, "message": err.Error()})
+		default:
 			log.Printf("[Admin] 全量同步失败: %v", err)
-		} else {
-			lastSyncErr = ""
-			log.Println("[Admin] 全量同步执行成功！")
+			c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "message": err.Error()})
 		}
-		syncStateLock.Unlock()
-	}()
+		return
+	}
 
+	run, err := h.storage.GetSyncRun(ctx, runID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "message": err.Error()})
+		return
+	}
+	log.Printf("[Admin] 全量同步运行结束：run_id=%s status=%s", run.RunID, run.Status)
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
-		"message": "全量同步任务已在后台启动",
+		"message": "全量同步已执行完成",
+		"data": gin.H{
+			"run_id": run.RunID,
+			"status": run.Status,
+		},
 	})
 }
 
@@ -322,4 +316,3 @@ func (h *Handler) AdminUpdateRootSandbox(c *gin.Context) {
 		"message": "母空间沙箱环境配置保存成功",
 	})
 }
-

@@ -48,13 +48,19 @@ func TestEncryptAESGCM(t *testing.T) {
 		}
 	})
 
-	t.Run("returns plaintext when key is nil", func(t *testing.T) {
+	t.Run("returns error when key is nil", func(t *testing.T) {
 		encrypted, err := EncryptAESGCM("minio-secret-password", nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if err != ErrMissingKey {
+			t.Fatalf("expected ErrMissingKey, got %v", err)
 		}
-		if encrypted != "minio-secret-password" {
-			t.Errorf("expected plaintext when key is nil, got %s", encrypted)
+		if encrypted != "" {
+			t.Errorf("expected empty string on error, got %s", encrypted)
+		}
+	})
+
+	t.Run("returns error when key has wrong length", func(t *testing.T) {
+		if _, err := EncryptAESGCM("minio-secret-password", []byte("short")); err != ErrMissingKey {
+			t.Fatalf("expected ErrMissingKey, got %v", err)
 		}
 	})
 }

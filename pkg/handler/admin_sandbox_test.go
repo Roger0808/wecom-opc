@@ -31,14 +31,14 @@ func TestAdminSandbox_GetRootSandbox(t *testing.T) {
 	t.Run("returns 200 with null data when no config exists", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodGet, "/admin/api/root-config/sandbox", nil)
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
 		}
 
 		var resp struct {
-			Code int                  `json:"code"`
+			Code int                   `json:"code"`
 			Data *model.RootSandboxDTO `json:"data"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -67,7 +67,7 @@ func TestAdminSandbox_GetRootSandbox(t *testing.T) {
 		putReq, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/sandbox", bytes.NewBuffer(reqBody))
 		putReq.Header.Set("Content-Type", "application/json")
 		putW := httptest.NewRecorder()
-		r.ServeHTTP(putW, putReq)
+		r.ServeHTTP(putW, withAdminAuth(t, putReq))
 		if putW.Code != http.StatusOK {
 			t.Fatalf("failed to seed sandbox config: %s", putW.Body.String())
 		}
@@ -75,14 +75,14 @@ func TestAdminSandbox_GetRootSandbox(t *testing.T) {
 		// GET 测试
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodGet, "/admin/api/root-config/sandbox", nil)
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
 		}
 
 		var resp struct {
-			Code int                  `json:"code"`
+			Code int                   `json:"code"`
 			Data *model.RootSandboxDTO `json:"data"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -114,7 +114,7 @@ func TestAdminSandbox_GetRootSandbox(t *testing.T) {
 		}
 
 		var resp struct {
-			Code int                  `json:"code"`
+			Code int                   `json:"code"`
 			Data *model.RootSandboxDTO `json:"data"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -156,7 +156,7 @@ func TestAdminSandbox_UpdateRootSandbox_Success(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/sandbox", bytes.NewBuffer(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
@@ -248,7 +248,7 @@ func TestAdminSandbox_UpdateRootSandbox_ValidationErrors(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/sandbox", bytes.NewBuffer(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected status 400, got %d, body: %s", w.Code, w.Body.String())
@@ -309,7 +309,7 @@ func TestAdminSandbox_UpdateRootSandbox_ValidationErrors(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/sandbox", bytes.NewBuffer(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected status 400, got %d, body: %s", w.Code, w.Body.String())
@@ -337,7 +337,7 @@ func TestAdminSandbox_UpdateRootSandbox_ValidationErrors(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/sandbox", bytes.NewBuffer(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected status 400, got %d, body: %s", w.Code, w.Body.String())
@@ -354,7 +354,7 @@ func TestAdminSandbox_UpdateRootSandbox_ValidationErrors(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/sandbox", bytes.NewBuffer(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected status 400, got %d, body: %s", w.Code, w.Body.String())
@@ -365,7 +365,7 @@ func TestAdminSandbox_UpdateRootSandbox_ValidationErrors(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/sandbox", bytes.NewBufferString("{invalid-json"))
 		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected status 400, got %d, body: %s", w.Code, w.Body.String())
@@ -457,7 +457,7 @@ func TestAdminSandbox_DefaultRootTenantID(t *testing.T) {
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/sandbox", bytes.NewBuffer(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, withAdminAuth(t, req))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
@@ -479,7 +479,7 @@ func TestAdminSandbox_DefaultRootTenantID(t *testing.T) {
 		t.Fatalf("expected status 200, got %d, body: %s", wGet.Code, wGet.Body.String())
 	}
 	var resp struct {
-		Code int                  `json:"code"`
+		Code int                   `json:"code"`
 		Data *model.RootSandboxDTO `json:"data"`
 	}
 	_ = json.Unmarshal(wGet.Body.Bytes(), &resp)

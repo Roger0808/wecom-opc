@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"weknora-tokendance/config"
+	"weknora-tokendance/pkg/adminauth"
 	"weknora-tokendance/pkg/crypto"
 	"weknora-tokendance/pkg/model"
 	"weknora-tokendance/pkg/storage"
@@ -38,6 +39,16 @@ func setupTestHandler(t *testing.T, rootTenantID uint64) (*Handler, *gin.Engine,
 	}
 	sqlDB.SetMaxOpenConns(1)
 
+	stateDSN := fmt.Sprintf("file:%s?mode=memory&cache=shared", uuid.New().String())
+	stateDB, err := gorm.Open(sqlite.Open(stateDSN), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("failed to open sqlite in-memory state db: %v", err)
+	}
+	stateSQLDB, _ := stateDB.DB()
+	stateSQLDB.SetMaxOpenConns(1)
+
 	err = db.AutoMigrate(
 		&model.WeKnoraTenant{},
 		&model.WeKnoraModel{},
@@ -50,20 +61,30 @@ func setupTestHandler(t *testing.T, rootTenantID uint64) (*Handler, *gin.Engine,
 	if err != nil {
 		t.Fatalf("failed to auto migrate: %v", err)
 	}
+	if err := stateDB.AutoMigrate(&model.AuditEvent{}); err != nil {
+		t.Fatalf("failed to auto migrate state db: %v", err)
+	}
 
 	aesKey := "12345678901234567890123456789012"
 	cfg := &config.Config{
 		WeKnora: config.WeKnoraConfig{
 			RootTenantID: rootTenantID,
 		},
+		Admin: config.AdminConfig{
+			Key: string(testAdminSecret),
+		},
 		SystemAESKey: aesKey,
 	}
 
-	s := storage.NewStorageWithDB(db)
+	s := storage.NewStorageWithDBs(db, stateDB)
 	h := NewHandler(cfg, nil, nil, nil, nil, s)
 
 	r := gin.New()
-	adminAPI := r.Group("/admin/api")
+	// 与 main.go 一致：/admin/api 全组挂载认证 + CSRF 中间件
+	adminAPI := r.Group("/admin/api", adminauth.RequireAdmin(adminauth.MiddlewareConfig{
+		Secret: testAdminSecret,
+		Audit:  s.InsertAuditEvent,
+	}))
 	{
 		adminAPI.GET("/root-config", h.AdminGetRootConfig)
 		adminAPI.PUT("/root-config/models", h.AdminUpdateRootModels)
@@ -74,6 +95,26 @@ func setupTestHandler(t *testing.T, rootTenantID uint64) (*Handler, *gin.Engine,
 	}
 
 	return h, r, db, []byte(aesKey)
+}
+
+// testAdminSecret 测试用管理 JWT 密钥（32 字节）
+var testAdminSecret = []byte("test-admin-secret-0123456789abcdef")
+
+// mustAdminToken 生成测试用管理 token
+func mustAdminToken(t *testing.T, subject string, role adminauth.Role, tenantID uint64) string {
+	t.Helper()
+	token, err := adminauth.IssueToken(testAdminSecret, subject, role, tenantID, time.Hour)
+	if err != nil {
+		t.Fatalf("issue admin token: %v", err)
+	}
+	return token
+}
+
+// withAdminAuth 为请求附加合法的管理 token（system_admin）
+func withAdminAuth(t *testing.T, req *http.Request) *http.Request {
+	t.Helper()
+	req.Header.Set("Authorization", "Bearer "+mustAdminToken(t, "test-admin", adminauth.RoleSystemAdmin, 0))
+	return req
 }
 
 func TestAdminGetRootConfig(t *testing.T) {
@@ -138,7 +179,7 @@ func TestAdminGetRootConfig(t *testing.T) {
 	// 执行 GET 请求
 	req, _ := http.NewRequest(http.MethodGet, "/admin/api/root-config", nil)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	r.ServeHTTP(w, withAdminAuth(t, req))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
@@ -233,7 +274,7 @@ func TestAdminUpdateRootModels(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/models", bytes.NewBufferString(`{}`))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected status 400, got %d, body: %s", w.Code, w.Body.String())
@@ -244,7 +285,7 @@ func TestAdminUpdateRootModels(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/models", bytes.NewBufferString(`invalid-json`))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected status 400, got %d", w.Code)
@@ -271,7 +312,7 @@ func TestAdminUpdateRootModels(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/models", bytes.NewBuffer(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
@@ -340,7 +381,7 @@ func TestAdminUpdateRootStorage(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/storage", bytes.NewBufferString(`{invalid json`))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected status 400, got %d", w.Code)
@@ -360,7 +401,7 @@ func TestAdminUpdateRootStorage(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/storage", bytes.NewBuffer(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
@@ -447,7 +488,7 @@ func TestAdminBroadcastRootConfig(t *testing.T) {
 	t.Run("200 OK broadcast via Router", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPost, "/admin/api/root-config/broadcast", nil)
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected status 200, got %d, body: %s", w.Code, w.Body.String())
@@ -508,7 +549,7 @@ func TestAdminHandlers_StorageErrors(t *testing.T) {
 	t.Run("GetRootConfig returns 500 on storage error", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodGet, "/admin/api/root-config", nil)
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("expected 500, got %d", w.Code)
@@ -525,7 +566,7 @@ func TestAdminHandlers_StorageErrors(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/models", bytes.NewBuffer(b))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("expected 500, got %d", w.Code)
@@ -540,7 +581,7 @@ func TestAdminHandlers_StorageErrors(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPut, "/admin/api/root-config/storage", bytes.NewBuffer(b))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("expected 500, got %d", w.Code)
@@ -550,11 +591,10 @@ func TestAdminHandlers_StorageErrors(t *testing.T) {
 	t.Run("BroadcastRootConfig returns 500 on storage error", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPost, "/admin/api/root-config/broadcast", nil)
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
+		r.ServeHTTP(w, withAdminAuth(t, req))
 
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("expected 500, got %d", w.Code)
 		}
 	})
 }
-

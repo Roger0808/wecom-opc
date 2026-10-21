@@ -15,14 +15,17 @@ import (
 )
 
 type Storage struct {
-	db *gorm.DB
+	db      *gorm.DB // WeKnora 库连接（既有兼容桥与映射表）
+	stateDB *gorm.DB // platform 自有状态库连接（迁移、审计、身份/授权/同步账本）
+}
+
+func postgresDSN(cfg config.DatabaseConfig) string {
+	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.DBName, cfg.SSLMode)
 }
 
 func NewStorage(cfg config.DatabaseConfig) (*Storage, error) {
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.DBName, cfg.SSLMode)
-
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+	db, err := gorm.Open(postgres.Open(postgresDSN(cfg)), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
 	})
 	if err != nil {
@@ -37,14 +40,42 @@ func NewStorage(cfg config.DatabaseConfig) (*Storage, error) {
 	return &Storage{db: db}, nil
 }
 
+// NewStateDB 打开 platform 自有状态库连接（与 WeKnora 库分离、独立账号）。
+// 不执行 AutoMigrate：表结构全部由 migrations/ 内嵌 SQL 经 RunMigrations 显式版本化建立。
+func NewStateDB(cfg config.DatabaseConfig) (*gorm.DB, error) {
+	db, err := gorm.Open(postgres.Open(postgresDSN(cfg)), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("connect state postgres: %w", err)
+	}
+	return db, nil
+}
+
+// WithStateDB 注入平台状态库连接并返回 s（主连接不变），便于启动时组装。
+func (s *Storage) WithStateDB(stateDB *gorm.DB) *Storage {
+	s.stateDB = stateDB
+	return s
+}
+
 // NewStorageWithDB 使用现有的 gorm.DB 初始化 Storage 实例 (用于单元测试或自定义连接)
 func NewStorageWithDB(db *gorm.DB) *Storage {
 	return &Storage{db: db}
 }
 
+// NewStorageWithDBs 使用现有的主库/状态库 gorm.DB 初始化 Storage 实例 (用于单元测试)
+func NewStorageWithDBs(db, stateDB *gorm.DB) *Storage {
+	return &Storage{db: db, stateDB: stateDB}
+}
+
 // DB 返回底层 gorm.DB 实例
 func (s *Storage) DB() *gorm.DB {
 	return s.db
+}
+
+// StateDB 返回平台自有状态库连接（未配置时返回 nil）
+func (s *Storage) StateDB() *gorm.DB {
+	return s.stateDB
 }
 
 // GetUserByEmailOrUsername 查找用户
@@ -159,6 +190,22 @@ func (s *Storage) CreateAuthToken(ctx context.Context, token *model.WeKnoraAuthT
 	return s.db.WithContext(ctx).Create(token).Error
 }
 
+// GetTenantMembershipRole 返回用户在指定空间的成员角色（code-exchange 空间视图用）；
+// 无成员关系或非 active 时返回空串。
+func (s *Storage) GetTenantMembershipRole(ctx context.Context, userID string, tenantID uint64) (string, error) {
+	if s.db == nil {
+		return "", fmt.Errorf("main db not configured")
+	}
+	var member model.WeKnoraTenantMember
+	err := s.db.WithContext(ctx).
+		Where("user_id = ? AND tenant_id = ? AND status = 'active'", userID, tenantID).
+		First(&member).Error
+	if err != nil {
+		return "", nil // 无成员关系不视为错误：角色置空
+	}
+	return member.Role, nil
+}
+
 // GetModelsByTenantID 获取指定租户的所有有效模型
 func (s *Storage) GetModelsByTenantID(ctx context.Context, tenantID uint64) ([]model.WeKnoraModel, error) {
 	var list []model.WeKnoraModel
@@ -253,4 +300,3 @@ func (s *Storage) SyncTenantModelsFromParent(ctx context.Context, parentTenantID
 
 	return nil
 }
-

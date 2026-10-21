@@ -42,55 +42,9 @@ func NewSyncer(cfg *config.Config, wecomClient *wecom.Client, acClient *accountc
 	}
 }
 
-// SyncAll 执行全量同步：
-// 1. 从统一账户中心拉取所有部门并构建层级树；
-// 2. 筛选出所有 level == 1 的一级部门作为租户空间；
-// 3. 将这些部门同步并在 WeKnora 创建对应 Tenant；
-// 4. 按父共享空间的 LLM Provider 所有的配置，同步到相应的部门 LLM Provider 配置中；
-// 5. 将部门主管自动关联为空间管理员 (Admin)。
-func (s *Syncer) SyncAll(ctx context.Context) error {
-	log.Println("[Syncer] 开始从统一账户中心拉取组织架构...")
-
-	allDepts, err := s.ac.FetchAllActiveDepartments(ctx)
-	if err != nil {
-		return fmt.Errorf("fetch departments from account center: %w", err)
-	}
-	log.Printf("[Syncer] 成功获取统一账户中心有效部门 %d 个", len(allDepts))
-
-	// 构建部门映射表
-	deptMap := make(map[string]accountcenter.SysDepartment, len(allDepts))
-	for _, d := range allDepts {
-		deptMap[d.DepartmentCode] = d
-	}
-
-	// 筛选目标空间部门：只保留 level == 1 的一级部门
-	var targetList []accountcenter.SysDepartment
-	targetMap := make(map[string]accountcenter.SysDepartment)
-
-	for _, d := range allDepts {
-		if d.DepartmentLevel == 1 {
-			targetList = append(targetList, d)
-			targetMap[d.DepartmentCode] = d
-		}
-	}
-
-	s.deptCacheLock.Lock()
-	s.deptMap = deptMap
-	s.targetDepts = targetMap
-	s.deptCacheLock.Unlock()
-
-	log.Printf("[Syncer] 筛选出符合规则的租户空间部门 %d 个 (仅 level==1 一级部门)", len(targetList))
-
-	// 遍历并同步至 WeKnora 空间
-	for _, dept := range targetList {
-		if err := s.syncDepartmentToTenant(ctx, dept, deptMap); err != nil {
-			log.Printf("[Syncer] 部门同步失败 [%s: %s]: %v", dept.DepartmentCode, dept.DepartmentName, err)
-		}
-	}
-
-	log.Println("[Syncer] 组织架构空间同步完成！")
-	return nil
-}
+// SyncAll 已删除（H5/INT-130 触发点归一）：全量同步的唯一入口是
+// syncservice.Run(scope=full)（/integration/v1/admin/sync/runs 与
+// /admin/api/sync/all 均收敛到它），本包不再保留绕过账本/锁/快照契约的全量入口。
 
 // buildDepartmentHierarchyPath 构建部门层级全路径，如: "运营与技术本部 / 技术交付中心 / BDE平台开发部"
 func (s *Syncer) buildDepartmentHierarchyPath(d accountcenter.SysDepartment, deptMap map[string]accountcenter.SysDepartment) string {
@@ -116,8 +70,8 @@ func (s *Syncer) buildDepartmentHierarchyPath(d accountcenter.SysDepartment, dep
 	return strings.Join(names, " / ")
 }
 
-// syncDepartmentToTenant 将统一账户中心部门持久化为 WeKnora Tenant
-func (s *Syncer) syncDepartmentToTenant(ctx context.Context, dept accountcenter.SysDepartment, deptMap map[string]accountcenter.SysDepartment) error {
+// SyncDepartment 将统一账户中心部门持久化为 WeKnora Tenant（导出供 TASK-P08 同步服务复用）。
+func (s *Syncer) SyncDepartment(ctx context.Context, dept accountcenter.SysDepartment, deptMap map[string]accountcenter.SysDepartment) error {
 	deptIntID, _ := strconv.ParseInt(dept.ID, 10, 64)
 	if deptIntID == 0 {
 		deptIntID = 1
@@ -196,14 +150,18 @@ func (s *Syncer) syncDepartmentToTenant(ctx context.Context, dept accountcenter.
 		}
 	}
 
-	// 6. 若部门存在主管 (thirdManagerId)，自动预置为主管并赋予空间 Admin 角色
+	// 6. 若部门存在主管 (thirdManagerId)，同步调用预置为主管并赋予空间 Admin 角色
+	// （H5：不再使用裸 goroutine——错误随调用栈传播，由 sync 步骤记账承载重试）
 	if dept.ThirdManagerID != "" {
-		go func(managerThirdID string, targetTenantID uint64) {
-			mUser, mErr := s.ac.GetUserByThirdUserID(context.Background(), managerThirdID)
-			if mErr == nil && mUser != nil {
-				_ = s.SyncUserAndMemberships(context.Background(), mUser, &dept, true)
+		mUser, mErr := s.ac.GetUserByThirdUserID(ctx, dept.ThirdManagerID)
+		if mErr != nil {
+			return fmt.Errorf("fetch department manager %s: %w", dept.ThirdManagerID, mErr)
+		}
+		if mUser != nil {
+			if _, mErr := s.SyncUserAndMemberships(ctx, mUser, &dept, true); mErr != nil {
+				return fmt.Errorf("sync department manager %s: %w", dept.ThirdManagerID, mErr)
 			}
-		}(dept.ThirdManagerID, tenantID)
+		}
 	}
 
 	return nil
@@ -227,37 +185,68 @@ func (s *Syncer) SyncSingleSpace(ctx context.Context, tenantID uint64) error {
 	return nil
 }
 
-// FindTargetDepartmentForUser 为用户解析其对应的同步空间部门 (优先当前部门是否是空间；否则沿 parentCode 向上追溯到空间部门)
-func (s *Syncer) FindTargetDepartmentForUser(ctx context.Context, userDeptCode string) (*accountcenter.SysDepartment, error) {
-	s.deptCacheLock.RLock()
-	hasCache := len(s.deptMap) > 0
-	s.deptCacheLock.RUnlock()
-
-	if !hasCache {
-		_ = s.SyncAll(ctx)
-	}
-
-	s.deptCacheLock.RLock()
-	defer s.deptCacheLock.RUnlock()
-
+// FindTargetDepartmentInMap 在部门树快照内为用户解析空间部门：
+// 当前部门是空间则直接命中，否则沿 parentCode 向上追溯到最近的 level==1 部门。
+func FindTargetDepartmentInMap(userDeptCode string, deptMap map[string]accountcenter.SysDepartment, targetDepts map[string]accountcenter.SysDepartment) *accountcenter.SysDepartment {
 	currCode := userDeptCode
 	for currCode != "" {
-		if target, ok := s.targetDepts[currCode]; ok {
-			return &target, nil
+		if target, ok := targetDepts[currCode]; ok {
+			return &target
 		}
-		parent, ok := s.deptMap[currCode]
+		parent, ok := deptMap[currCode]
 		if !ok {
 			break
 		}
 		currCode = strings.TrimSpace(parent.ParentCode)
 	}
+	return nil
+}
+
+// FindTargetDepartmentForUser 为用户解析其对应的同步空间部门。
+// 优先查内存缓存（快照树向上追溯）；缓存未建立时按 BND-130 直接查映射表，
+// 不再冷启动全量 SyncAll（登录路径如需补空间由上层触发单部门同步，scope=department）。
+func (s *Syncer) FindTargetDepartmentForUser(ctx context.Context, userDeptCode string) (*accountcenter.SysDepartment, error) {
+	userDeptCode = strings.TrimSpace(userDeptCode)
+	if userDeptCode == "" {
+		return nil, nil
+	}
+
+	s.deptCacheLock.RLock()
+	hasCache := len(s.deptMap) > 0
+	if hasCache {
+		deptMap := s.deptMap
+		targetDepts := s.targetDepts
+		s.deptCacheLock.RUnlock()
+		return FindTargetDepartmentInMap(userDeptCode, deptMap, targetDepts), nil
+	}
+	s.deptCacheLock.RUnlock()
+
+	// 缓存冷启动：直接查部门→租户映射表（只覆盖已同步的 level==1 空间部门）
+	if s.storage != nil {
+		if mapping, err := s.storage.FindTenantByDeptCode(ctx, userDeptCode); err == nil && mapping != nil {
+			return &accountcenter.SysDepartment{
+				ID:             fmt.Sprintf("%d", mapping.WeComDeptID),
+				DepartmentCode: mapping.DepartmentCode,
+				DepartmentName: mapping.DeptName,
+			}, nil
+		}
+	}
 	return nil, nil
 }
 
-// SyncUserAndMemberships 同步员工及空间归属
-func (s *Syncer) SyncUserAndMemberships(ctx context.Context, u *accountcenter.SysUser, targetDept *accountcenter.SysDepartment, isLeader bool) error {
+// UpdateDeptCache 用最新部门树快照刷新内存缓存（同步服务每轮快照后回写）。
+func (s *Syncer) UpdateDeptCache(deptMap, targetDepts map[string]accountcenter.SysDepartment) {
+	s.deptCacheLock.Lock()
+	defer s.deptCacheLock.Unlock()
+	s.deptMap = deptMap
+	s.targetDepts = targetDepts
+}
+
+// SyncUserAndMemberships 同步员工及空间归属，返回 knowledge 侧用户 ID（开户或复用）。
+// 复用既有 UpsertUser/EnsureTenantMembership 直写 WeKnora 库（既有兼容行为，P09 再隔离）。
+func (s *Syncer) SyncUserAndMemberships(ctx context.Context, u *accountcenter.SysUser, targetDept *accountcenter.SysDepartment, isLeader bool) (string, error) {
 	if u.UserStatus == 0 {
-		return nil // 禁用用户跳过
+		return "", nil // 禁用用户跳过
 	}
 
 	phone := strings.TrimSpace(u.Mobile)
@@ -346,7 +335,7 @@ func (s *Syncer) SyncUserAndMemberships(ctx context.Context, u *accountcenter.Sy
 			UpdatedAt:           time.Now(),
 		}
 		if err := s.storage.UpsertUser(ctx, newUser); err != nil {
-			return fmt.Errorf("create user: %w", err)
+			return "", fmt.Errorf("create user: %w", err)
 		}
 	}
 
@@ -374,5 +363,5 @@ func (s *Syncer) SyncUserAndMemberships(ctx context.Context, u *accountcenter.Sy
 		}
 	}
 
-	return nil
+	return userID, nil
 }

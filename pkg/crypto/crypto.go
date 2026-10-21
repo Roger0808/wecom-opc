@@ -16,14 +16,22 @@ const EncPrefix = "enc:v1:"
 // ErrEncryptedDataMissingKey is returned when the value carries the enc:v1: prefix but no valid key is provided.
 var ErrEncryptedDataMissingKey = errors.New("encrypted data found but AES key is not set or has wrong length")
 
+// ErrMissingKey is returned when encryption is requested but the AES key is not set or has wrong length.
+// Callers must surface this error instead of silently writing plaintext secrets.
+var ErrMissingKey = errors.New("AES key is not set or has wrong length, refusing to handle plaintext")
+
 // EncryptAESGCM encrypts plaintext with AES-256-GCM.
-// Returns the original string if empty, already encrypted, or key is nil.
+// Returns the original string if empty or already encrypted.
+// Returns ErrMissingKey if a non-empty plaintext would otherwise be stored unencrypted.
 func EncryptAESGCM(plaintext string, key []byte) (string, error) {
-	if plaintext == "" || key == nil {
-		return plaintext, nil
+	if plaintext == "" {
+		return "", nil
 	}
 	if strings.HasPrefix(plaintext, EncPrefix) {
 		return plaintext, nil
+	}
+	if len(key) != 32 {
+		return "", ErrMissingKey
 	}
 
 	block, err := aes.NewCipher(key)
