@@ -656,9 +656,13 @@ func (h *Handler) auditOIDC(c *gin.Context, action, actor string, detail map[str
 	}
 }
 
-// sanitizeUpstreamErr 把上游错误压成单行、限长，供审计与错误描述使用（不含密钥）。
+// sanitizeUpstreamErr 把上游错误压成单行、限长，并剥掉查询串里的凭据
+// （企微 gettoken 等标准带参 URL 会把 corpsecret 放进错误文本），供审计与
+// 错误描述使用。部署实测（2026-10-22）曾把含 corpsecret 的 URL 记入审计库。
 func sanitizeUpstreamErr(err error) string {
 	msg := strings.Join(strings.Fields(err.Error()), " ")
+	re := regexp.MustCompile(`(corpsecret|secret|password|access_token)=[^&\s]+`)
+	msg = re.ReplaceAllString(msg, "$1=[redacted]")
 	if len(msg) > 160 {
 		msg = msg[:160] + "…"
 	}
