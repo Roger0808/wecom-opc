@@ -449,6 +449,12 @@ func (h *IntegrationHandler) issueWorkTokens(c *gin.Context, ctx context.Context
 		h.deny(c, http.StatusInternalServerError, errCodeInternal, "list entitlements failed", "client:"+txn.ClientID, auditTxnDetail(txn))
 		return
 	}
+	// 真实姓名/邮箱取自 knowledge 用户行（与 code-exchange 同一来源），
+	// work 客户端据此在企业区展示企业身份；解析失败留空串。
+	email, displayName := "", ""
+	if ku, uerr := kbridge.NewWeKnoraStore(h.storage).GetUserByID(ctx, link.KnowledgeUserID); uerr == nil && ku != nil {
+		email, displayName = ku.Email, ku.Username
+	}
 	tenantSet := make(map[string]struct{}, len(ents))
 	capSet := make(map[string]struct{}, len(ents))
 	authzVersion := int64(0)
@@ -495,6 +501,8 @@ func (h *IntegrationHandler) issueWorkTokens(c *gin.Context, ctx context.Context
 		"spaces":        tenants,
 		"authz_version": authzVersion,
 		"capabilities":  capabilities,
+		"email":         email,
+		"name":          displayName,
 		"tenant":        tenant,
 		"tenants":       tenants,
 	})
