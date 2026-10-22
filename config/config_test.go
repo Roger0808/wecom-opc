@@ -255,3 +255,34 @@ oidc:
 		}
 	})
 }
+
+func TestLoadConfig_ServiceTokenEnvOverride(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.yaml")
+	yamlContent := `
+server:
+  port: 3002
+  service_token: yaml-token
+system_aes_key: "0123456789abcdef0123456789abcdef"
+`
+	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	t.Setenv("PLATFORM_SERVICE_TOKEN", "svc-env-token")
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Server.ServiceToken != "svc-env-token" {
+		t.Fatalf("service token env override not applied: %q", cfg.Server.ServiceToken)
+	}
+	// 未设 env 时回落 yaml
+	t.Setenv("PLATFORM_SERVICE_TOKEN", "")
+	cfg2, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if cfg2.Server.ServiceToken != "yaml-token" {
+		t.Fatalf("yaml fallback broken: %q", cfg2.Server.ServiceToken)
+	}
+}

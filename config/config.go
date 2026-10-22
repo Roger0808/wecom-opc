@@ -211,6 +211,9 @@ func LoadConfig(path string) (*Config, error) {
 	if envExternalBaseURL := os.Getenv("EXTERNAL_BASE_URL"); envExternalBaseURL != "" {
 		cfg.Server.ExternalBaseURL = envExternalBaseURL
 	}
+	if envServiceToken := os.Getenv("PLATFORM_SERVICE_TOKEN"); envServiceToken != "" {
+		cfg.Server.ServiceToken = envServiceToken
+	}
 	if envBridgeKey := os.Getenv("PLATFORM_BRIDGE_KEY"); envBridgeKey != "" {
 		cfg.Bridge.Key = envBridgeKey
 	}
