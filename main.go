@@ -125,6 +125,17 @@ func main() {
 		adminAPI.POST("/root-config/broadcast", h.AdminBroadcastRootConfig)
 	}
 
+	// 应用部署与转技能一期核心 API 路由
+	appsAPI := r.Group("/api/v1/apps")
+	{
+		appsAPI.POST("/check-slug", h.CheckSlug)       // 校验 slug 唯一性并返回分配内网地址
+		appsAPI.GET("/resources", h.ListResources)    // 获取脱敏后的线上现有可用资源列表
+		appsAPI.POST("/publish", h.PublishApp)         // 上传应用包、技能包与配置触发异步部署
+		appsAPI.GET("", h.ListApps)                   // 查询所有应用列表
+		appsAPI.GET("/:slug", h.GetApp)               // 查询单个应用详情及部署状态
+		appsAPI.PUT("/:slug/config", h.UpdateAppConfig)// 修改应用配置并触发容器秒级重启
+	}
+
 	r.GET("/health", h.HealthCheck)
 
 	port := cfg.Server.Port

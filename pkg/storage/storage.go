@@ -29,9 +29,9 @@ func NewStorage(cfg config.DatabaseConfig) (*Storage, error) {
 		return nil, fmt.Errorf("connect postgres: %w", err)
 	}
 
-	// 自动创建 mapping 表
-	if err := db.AutoMigrate(&model.WeComDeptTenantMapping{}); err != nil {
-		return nil, fmt.Errorf("auto migrate mapping table: %w", err)
+	// 自动创建 mapping 表与 deployed_apps 表
+	if err := db.AutoMigrate(&model.WeComDeptTenantMapping{}, &model.DeployedApp{}); err != nil {
+		return nil, fmt.Errorf("auto migrate tables: %w", err)
 	}
 
 	return &Storage{db: db}, nil

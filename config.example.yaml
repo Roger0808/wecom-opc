@@ -42,3 +42,50 @@ sync:
 
 # WeKnora 敏感字段 AES-256-GCM 加密密钥 (32 字节)，与 WeKnora SYSTEM_AES_KEY 对齐（真实值禁止入库）
 system_aes_key: "change-me-32-byte-hex-key"
+
+# 应用部署与转技能一期配置 (纯内网 HTTP 容器部署与技能同步)
+app_deploy:
+  intranet_root_domain: "apps.opc.intra"          # 内网泛域名后缀 (*.apps.opc.intra 解析到 deploy-opc IP)
+  caprover_url: "http://deploy.opc.intra:3000"    # deploy-opc (CapRover) 管理地址
+  caprover_password: "change-me-caprover-password"# deploy-opc 管理密码
+  knowledge_base_url: "http://knowledge.opc.intra:8080" # knowledge-opc API 地址
+  knowledge_admin_token: "change-me-knowledge-token"     # knowledge-opc 技能 Catalog 管理 Token
+  online_resources:
+    - id: "shared-mysql-main"
+      name: "内网公共 MySQL 8.0"
+      type: "mysql"
+      description: "公司内网共享 MySQL 实例 (10.10.1.21:3306)"
+      env_vars:
+        MYSQL_HOST: "10.10.1.21"
+        MYSQL_PORT: "3306"
+        MYSQL_USER: "opc_app"
+        MYSQL_PASSWORD: "change-me"
+        DATABASE_URL: "mysql://opc_app:change-me@10.10.1.21:3306/opc_apps"
+    - id: "shared-pg-main"
+      name: "内网公共 PostgreSQL 16"
+      type: "postgres"
+      description: "公司内网共享 PostgreSQL 实例 (10.10.1.22:5432)"
+      env_vars:
+        PGHOST: "10.10.1.22"
+        PGPORT: "5432"
+        PGUSER: "opc_app"
+        PGPASSWORD: "change-me"
+        PGDATABASE: "opc_apps"
+        DATABASE_URL: "postgresql://opc_app:change-me@10.10.1.22:5432/opc_apps"
+    - id: "shared-redis-main"
+      name: "内网公共 Redis 7"
+      type: "redis"
+      description: "公司内网共享 Redis 缓存 (10.10.1.23:6379)"
+      env_vars:
+        REDIS_HOST: "10.10.1.23"
+        REDIS_PORT: "6379"
+        REDIS_URL: "redis://10.10.1.23:6379/0"
+    - id: "shared-oss-minio"
+      name: "内网公共对象存储 (MinIO/OSS)"
+      type: "oss"
+      description: "公司内网 S3 兼容对象存储桶 (http://10.10.1.24:9000)"
+      env_vars:
+        S3_ENDPOINT: "http://10.10.1.24:9000"
+        S3_ACCESS_KEY: "change-me"
+        S3_SECRET_KEY: "change-me"
+        S3_BUCKET: "opc-apps"

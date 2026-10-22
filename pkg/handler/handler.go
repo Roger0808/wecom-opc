@@ -14,6 +14,7 @@ import (
 	"weknora-tokendance/config"
 	"weknora-tokendance/pkg/accountcenter"
 	"weknora-tokendance/pkg/auth"
+	"weknora-tokendance/pkg/deploy"
 	"weknora-tokendance/pkg/model"
 	"weknora-tokendance/pkg/storage"
 	"weknora-tokendance/pkg/syncer"
@@ -24,12 +25,14 @@ import (
 )
 
 type Handler struct {
-	cfg     *config.Config
-	wecom   *wecom.Client
-	ac      *accountcenter.Client
-	syncer  *syncer.Syncer
-	auth    *auth.AuthService
-	storage *storage.Storage
+	cfg             *config.Config
+	wecom           *wecom.Client
+	ac              *accountcenter.Client
+	syncer          *syncer.Syncer
+	auth            *auth.AuthService
+	storage         *storage.Storage
+	caproverClient  *deploy.CapRoverClient
+	knowledgeSyncer *deploy.KnowledgeSyncer
 
 	// 临时授权码缓存 (用于 OIDC /token 兑换)
 	authCodesLock sync.RWMutex
@@ -42,15 +45,37 @@ type OIDCAuthSession struct {
 }
 
 func NewHandler(cfg *config.Config, wecomClient *wecom.Client, acClient *accountcenter.Client, syncer *syncer.Syncer, authSvc *auth.AuthService, storage *storage.Storage) *Handler {
-	return &Handler{
-		cfg:       cfg,
-		wecom:     wecomClient,
-		ac:        acClient,
-		syncer:    syncer,
-		auth:      authSvc,
-		storage:   storage,
-		authCodes: make(map[string]*OIDCAuthSession),
+	var capClient *deploy.CapRoverClient
+	if cfg.AppDeploy.CaproverURL != "" {
+		capClient = deploy.NewCapRoverClient(cfg.AppDeploy.CaproverURL, cfg.AppDeploy.CaproverPassword, cfg.AppDeploy.IntranetRootDomain)
 	}
+
+	var knowSyncer *deploy.KnowledgeSyncer
+	if cfg.AppDeploy.KnowledgeBaseURL != "" {
+		knowSyncer = deploy.NewKnowledgeSyncer(cfg.AppDeploy.KnowledgeBaseURL, cfg.AppDeploy.KnowledgeAdminToken)
+	}
+
+	return &Handler{
+		cfg:             cfg,
+		wecom:           wecomClient,
+		ac:              acClient,
+		syncer:          syncer,
+		auth:            authSvc,
+		storage:         storage,
+		caproverClient:  capClient,
+		knowledgeSyncer: knowSyncer,
+		authCodes:       make(map[string]*OIDCAuthSession),
+	}
+}
+
+// SetCapRoverClient 用于单元测试注入模拟的 CapRoverClient
+func (h *Handler) SetCapRoverClient(client *deploy.CapRoverClient) {
+	h.caproverClient = client
+}
+
+// SetKnowledgeSyncer 用于单元测试注入模拟的 KnowledgeSyncer
+func (h *Handler) SetKnowledgeSyncer(syncer *deploy.KnowledgeSyncer) {
+	h.knowledgeSyncer = syncer
 }
 
 // LoginRedirect 跳转到企微 OAuth2 授权页面 (支持微信/企微内嵌打开或桌面扫码)

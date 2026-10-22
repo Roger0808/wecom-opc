@@ -8,13 +8,31 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	WeCom    WeComConfig    `yaml:"wecom"`
-	WeKnora  WeKnoraConfig  `yaml:"weknora"`
-	Database DatabaseConfig `yaml:"database"`
-	Sync         SyncConfig     `yaml:"sync"`
-	GraphQL      GraphQLConfig  `yaml:"graphql"`
-	SystemAESKey string         `yaml:"system_aes_key"`
+	Server       ServerConfig    `yaml:"server"`
+	WeCom        WeComConfig     `yaml:"wecom"`
+	WeKnora      WeKnoraConfig   `yaml:"weknora"`
+	Database     DatabaseConfig  `yaml:"database"`
+	Sync         SyncConfig      `yaml:"sync"`
+	GraphQL      GraphQLConfig   `yaml:"graphql"`
+	SystemAESKey string          `yaml:"system_aes_key"`
+	AppDeploy    AppDeployConfig `yaml:"app_deploy"`
+}
+
+type OnlineResourceConfig struct {
+	ID          string            `yaml:"id" json:"id"`
+	Name        string            `yaml:"name" json:"name"`
+	Type        string            `yaml:"type" json:"type"` // mysql, postgres, redis, oss, etc.
+	Description string            `yaml:"description" json:"description"`
+	EnvVars     map[string]string `yaml:"env_vars" json:"env_vars,omitempty"`
+}
+
+type AppDeployConfig struct {
+	IntranetRootDomain  string                 `yaml:"intranet_root_domain"`  // e.g. "apps.opc.intra"
+	CaproverURL         string                 `yaml:"caprover_url"`          // e.g. "http://deploy.opc.intra:3000"
+	CaproverPassword    string                 `yaml:"caprover_password"`     // CapRover admin password
+	KnowledgeBaseURL    string                 `yaml:"knowledge_base_url"`    // e.g. "http://knowledge.opc.intra:8080"
+	KnowledgeAdminToken string                 `yaml:"knowledge_admin_token"` // Token for knowledge-opc skills catalog
+	OnlineResources     []OnlineResourceConfig `yaml:"online_resources"`      // Available intranet resources
 }
 
 type GraphQLConfig struct {
@@ -108,6 +126,25 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if envSystemAESKey := os.Getenv("SYSTEM_AES_KEY"); envSystemAESKey != "" {
 		cfg.SystemAESKey = envSystemAESKey
+	}
+
+	if cfg.AppDeploy.IntranetRootDomain == "" {
+		cfg.AppDeploy.IntranetRootDomain = "apps.opc.intra"
+	}
+	if envIntranetDomain := os.Getenv("APP_DEPLOY_INTRANET_ROOT_DOMAIN"); envIntranetDomain != "" {
+		cfg.AppDeploy.IntranetRootDomain = envIntranetDomain
+	}
+	if envCaproverURL := os.Getenv("APP_DEPLOY_CAPROVER_URL"); envCaproverURL != "" {
+		cfg.AppDeploy.CaproverURL = envCaproverURL
+	}
+	if envCaproverPass := os.Getenv("APP_DEPLOY_CAPROVER_PASSWORD"); envCaproverPass != "" {
+		cfg.AppDeploy.CaproverPassword = envCaproverPass
+	}
+	if envKnowledgeURL := os.Getenv("APP_DEPLOY_KNOWLEDGE_BASE_URL"); envKnowledgeURL != "" {
+		cfg.AppDeploy.KnowledgeBaseURL = envKnowledgeURL
+	}
+	if envKnowledgeToken := os.Getenv("APP_DEPLOY_KNOWLEDGE_ADMIN_TOKEN"); envKnowledgeToken != "" {
+		cfg.AppDeploy.KnowledgeAdminToken = envKnowledgeToken
 	}
 
 	return &cfg, nil
