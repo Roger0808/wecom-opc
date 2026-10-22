@@ -191,7 +191,7 @@ func (c *Client) FetchActiveDepartmentsPaged(ctx context.Context) ([]SysDepartme
 		return nil, err
 	}
 
-	total, err := c.aggregateCount(ctx, "sysDepartmentAggregate", "SysDepartmentFilter", activeDepartmentFilter())
+	total, err := c.aggregateCount(ctx, "sysDepartmentAggregate", "SysDepartmentAggregateFilter", activeDepartmentFilter())
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +215,7 @@ func (c *Client) FetchActiveUsersPaged(ctx context.Context, departmentCode strin
 		return nil, err
 	}
 
-	total, err := c.aggregateCount(ctx, "sysUserAggregate", "SysUserFilter", filter)
+	total, err := c.aggregateCount(ctx, "sysUserAggregate", "SysUserAggregateFilter", filter)
 	if err != nil {
 		return nil, err
 	}
