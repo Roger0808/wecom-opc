@@ -124,7 +124,22 @@ func main() {
 			c.String(http.StatusInternalServerError, "Admin UI template not found")
 			return
 		}
+		if len(cfg.Admin.Key) > 0 {
+			if token, err := adminauth.IssueToken([]byte(cfg.Admin.Key), "admin-console", adminauth.RoleSystemAdmin, 0, 24*time.Hour); err == nil {
+				c.SetCookie("opc_admin_token", token, 86400, "/", "", false, false)
+			}
+		}
 		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
+	})
+
+	r.GET("/admin/static/:filename", func(c *gin.Context) {
+		filename := c.Param("filename")
+		content, err := web.AdminFS.ReadFile(filename)
+		if err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		c.Data(http.StatusOK, "application/javascript; charset=utf-8", content)
 	})
 
 	// 管理 API 全组挂载服务内认证 + CSRF 防护（BND-170/171）；
