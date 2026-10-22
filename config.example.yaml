@@ -3,9 +3,12 @@
 # 所有运行参数均在此文件中集中维护
 # ==========================================
 
-# 服务监听端口
+# 服务监听与对外地址
 server:
   port: 3002
+  # 本服务对外可达的规范地址：企微登录回跳与客户端 authorize_url 拼接的唯一事实源
+  # （不再信请求 Host/X-Forwarded-Host）。启动强制非空；env EXTERNAL_BASE_URL 可覆盖。
+  external_base_url: "http://127.0.0.1:3002"
 
 # 企业微信开发者凭据
 wecom:
@@ -14,6 +17,7 @@ wecom:
   contact_secret: "your_contact_secret"     # 通讯录管理 Secret (用于读取部门树和员工清单)
   agent_id: 1000002                         # 可选：仅在使用扫码组件时需要，普通OAuth免登不需要
   redirect_uri: "https://gateway.example.com/wecom/callback"
+  insecure_skip_verify: false               # 仅调试用途：true 时跳过企微 API TLS 证书校验，默认必须保持 false
 
 # WeKnora 平台对接配置 (与服务器运行环境完全对齐)
 weknora:
@@ -35,10 +39,28 @@ database:
   dbname: "weknora"
   sslmode: "disable"
 
-# 组织架构定时同步配置
-sync:
-  enable_cron: true
-  cron_schedule: "0 */30 * * *"             # 每30分钟自动全量同步一次企微组织架构
+# 平台自有状态库连接 (与 WeKnora 库分离、独立账号；审计/身份/授权/同步账本均落此库)
+statedb:
+  host: "db"                                # Docker 内部网络服务名
+  port: 5432
+  user: "root"
+  password: "change-me"                     # 真实密码禁止入库，运行时经 STATE_DB_PASSWORD 注入
+  dbname: "weknora_gateway_state"           # 缺省 weknora_gateway_state，可经 STATE_DB_NAME 覆盖
+  sslmode: "disable"
+
+# 组织架构同步：cron 定时同步已按 INT-130/BND-130 移除（启动、登录、缓存未命中、cron
+# 均不再隐式触发同步）；全量/单部门同步统一走 POST /integration/v1/admin/sync/runs
+# （或 /admin/api/sync/all）手动触发。enable_cron/cron_schedule 配置项已不再生效，
+# 仅保留供管理后台大盘展示历史字段，新部署不要配置。
+
+# 管理后台 (/admin/api) 安全基线 (BND-170/171)
+admin:
+  key: "change-me-admin-jwt-secret"         # 管理面 HS256 JWT 密钥，与 WeKnora JWTSecret 分离（真实值禁止入库，经 PLATFORM_ADMIN_KEY 注入）
+  allowed_origins: []                       # 浏览器来源白名单，如 "https://admin.example.com"；空=拒绝一切带 Origin 的管理写请求
+
+# 集成认证接口组 (/integration/v1) 平台自有令牌体系 (INT-101)
+auth:
+  key: "change-me-auth-jwt-secret"          # 平台认证面 HS256 JWT 密钥，与 admin.key、weknora.jwt_secret 分离（真实值禁止入库，经 PLATFORM_AUTH_KEY 注入）
 
 # knowledge 侧 OIDC 客户端 (/oidc/token、/oidc/userinfo)：企微 code 兑换 10min JWT，
 # userinfo 返回账户中心真实 {sub, name, email}。两个字段任一为空时两个端点 501
@@ -46,6 +68,10 @@ sync:
 oidc:
   client_id: ""
   client_secret: ""
+
+# knowledge 兼容桥 (TASK-P09 / ADR-004)：为有效映射用户签发 ≤120s 上游个人 token
+bridge:
+  key: "change-me-bridge-jwt-secret"        # 桥签名密钥，生产值与 weknora.jwt_secret 同源但独立注入（经 PLATFORM_BRIDGE_KEY 覆盖），与 auth.key/admin.key 分离；启动非空校验
 
 # WeKnora 敏感字段 AES-256-GCM 加密密钥 (32 字节)，与 WeKnora SYSTEM_AES_KEY 对齐（真实值禁止入库）
 system_aes_key: "change-me-32-byte-hex-key"
