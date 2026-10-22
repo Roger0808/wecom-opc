@@ -13,6 +13,7 @@ import (
 type Client struct {
 	endpoint   string
 	httpClient *http.Client
+	pageSize   int
 }
 
 func NewClient(endpoint string) *Client {
@@ -24,6 +25,7 @@ func NewClient(endpoint string) *Client {
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
+		pageSize: defaultSnapshotPageSize,
 	}
 }
 
@@ -49,9 +51,14 @@ type SysUser struct {
 	Mobile         string `json:"mobile"`
 	Email          string `json:"email"`
 	DepartmentCode string `json:"departmentCode"`
+	UserType       int    `json:"userType"`
 	UserStatus     int    `json:"userStatus"`
+	SyncFrom       int    `json:"syncFrom"`
 	UnionNo        string `json:"unionNo"` // 对应企业微信 UserID
 	ThirdUserID    string `json:"thirdUserId"`
+	IsDeleted      int    `json:"isDeleted"`
+	CreateTime     string `json:"createTime"`
+	UpdateTime     string `json:"updateTime"`
 }
 
 type graphQLRequest struct {

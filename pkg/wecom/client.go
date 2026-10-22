@@ -27,13 +27,15 @@ type Client struct {
 }
 
 func NewClient(cfg config.WeComConfig) *Client {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	// TLS 默认校验证书；仅当显式配置 insecure_skip_verify=true（调试用）时才跳过
+	var tlsConfig *tls.Config
+	if cfg.InsecureSkipVerify {
+		tlsConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // 显式 opt-in 的调试开关
 	}
 	return &Client{
 		cfg: cfg,
 		httpClient: &http.Client{
-			Transport: transport,
+			Transport: &http.Transport{TLSClientConfig: tlsConfig},
 			Timeout:   10 * time.Second,
 		},
 	}
@@ -81,8 +83,8 @@ type UserListResponse struct {
 // OAuth2 根据 code 获取用户信息
 type OAuthUserResponse struct {
 	BaseResponse
-	UserID   string `json:"UserId"`
-	OpenID   string `json:"OpenId"`
+	UserID     string `json:"UserId"`
+	OpenID     string `json:"OpenId"`
 	UserTicket string `json:"user_ticket"`
 }
 
@@ -292,10 +294,4 @@ func (c *Client) GetUserDetailByID(userID string) (*UserDetail, error) {
 	}
 
 	return &result.UserDetail, nil
-}
-
-func (c *Client) UpdateCorpID(corpID string) {
-	c.appTokenLock.Lock()
-	defer c.appTokenLock.Unlock()
-	c.cfg.CorpID = corpID
 }

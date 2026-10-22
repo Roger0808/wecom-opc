@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "demandId": "OPC-INTEGRATION-001",
+  "repositoryId": "platform-opc",
+  "baseline": {
+    "branch": "main",
+    "commit": "d6a07bf02fd7aeded69fca810c9c7e4f2f07d74c"
+  },
+  "branch": {
+    "expected": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "actual": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "disposition": "created",
+    "exceptionReason": null
+  },
+  "implementation": {
+    "ref": "feature/261020_OPC-INTEGRATION-001_opc-integration",
+    "fingerprint": "sha256:4c2778289880e0a12124a875817d75b263719420b857e6344554637e1bd6235a"
+  },
+  "verification": {
+    "outcome": "PASS",
+    "evidence": [
+      "verification.md"
+    ]
+  },
+  "review": {
+    "outcome": "READY_FOR_HUMAN_REVIEW",
+    "evidence": "review.md"
+  },
+  "dependencies": [],
+  "ready": true,
+  "generatedAt": "2026-10-21T18:47:54+08:00"
+}
