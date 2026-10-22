@@ -450,20 +450,23 @@ func (h *Handler) OIDCAuthorize(c *gin.Context) {
 	h.LoginRedirect(c)
 }
 
-// OIDCToken 标准 OIDC Token 换取端点
+// OIDCToken 标准 OIDC Token 换取端点。
+// 历史占位实现曾返回随机 UUID 并在 userinfo 返回写死的假员工档案——
+// 部署实测（2026-10-22）knowledge 的 OIDC 客户端指向本网关时，任何企微扫码
+// 都会"登录成功"为假用户 employee@benlai.com 并被自动开户。占位端点必须
+// 失败关闭：真实 OIDC 供给未实现前，一律 501，禁止再产生幽灵会话。
+// 真正的企业登录走 /integration/v1/auth/*（INT-101）。
 func (h *Handler) OIDCToken(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"access_token": uuid.New().String(),
-		"token_type":   "Bearer",
-		"expires_in":   86400,
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error":             "oidc_provider_not_implemented",
+		"error_description": "this gateway is not an OIDC provider; use /integration/v1/auth for enterprise login",
 	})
 }
 
-// OIDCUserInfo 标准 OIDC UserInfo 端点
+// OIDCUserInfo 标准 OIDC UserInfo 端点（同上，失败关闭）。
 func (h *Handler) OIDCUserInfo(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"sub":   "wecom_user",
-		"name":  "企微员工",
-		"email": "employee@benlai.com",
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error":             "oidc_provider_not_implemented",
+		"error_description": "this gateway is not an OIDC provider; no userinfo is available",
 	})
 }

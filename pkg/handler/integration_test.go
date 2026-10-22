@@ -1240,3 +1240,24 @@ func TestOAuthCallback_SubjectNotProvisioned(t *testing.T) {
 		}
 	}
 }
+
+// 占位 OIDC 端点必须失败关闭（部署实测：假 userinfo 曾让企微扫码登录为
+// 幽灵用户 employee@benlai.com 并被自动开户）。
+func TestOIDCPlaceholderFailsClosed(t *testing.T) {
+	r := gin.New()
+	h := &Handler{}
+	r.GET("/oidc/token", h.OIDCToken)
+	r.GET("/oidc/userinfo", h.OIDCUserInfo)
+
+	for _, path := range []string{"/oidc/token", "/oidc/userinfo"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotImplemented {
+			t.Fatalf("%s = %d, want 501", path, rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "employee@benlai.com") {
+			t.Fatalf("%s still leaks the fake userinfo: %s", path, rec.Body.String())
+		}
+	}
+}
