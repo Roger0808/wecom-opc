@@ -175,6 +175,7 @@ func setupIntegrationTest(t *testing.T, fac *fakeAccountCenter, wk *fakeWecomIde
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{ExternalBaseURL: "http://127.0.0.1:3002"}, // 与 doPostJSON/doGet 的 req.Host 一致
+		WeKnora:  config.WeKnoraConfig{BaseURL: "http://weknora.internal"},
 		WeCom:  config.WeComConfig{CorpID: testCorpID},
 		Admin:  config.AdminConfig{Key: testAdminKey},
 		Auth:   config.AuthConfig{Key: testAuthKey},
@@ -965,6 +966,22 @@ func TestLoginRedirect_IntegrationOverride(t *testing.T) {
 	bad := doGet(t, r, "/wecom/login?redirect_uri="+url.QueryEscape("http://evil.example.com/integration/v1/auth/callback"), nil)
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("evil override = %d", bad.Code)
+	}
+
+	// 既有 knowledge UI 回跳：与 WeKnora 规范地址同源的 oidc 回调放行（部署实测回归）。
+	legacyURI := "http://weknora.internal/api/v1/auth/oidc/callback"
+	lgRes := doGet(t, r, "/wecom/login?redirect_uri="+url.QueryEscape(legacyURI)+"&state=st-legacy", nil)
+	if lgRes.Code != http.StatusFound {
+		t.Fatalf("legacy knowledge override = %d, body=%s", lgRes.Code, lgRes.Body.String())
+	}
+	if !strings.Contains(lgRes.Header().Get("Location"), "redirect_uri="+url.QueryEscape(legacyURI)) {
+		t.Fatalf("legacy override not forwarded: %s", lgRes.Header().Get("Location"))
+	}
+
+	// WeKnora 同源但路径不对：仍 400。
+	wrongLegacy := doGet(t, r, "/wecom/login?redirect_uri="+url.QueryEscape("http://weknora.internal/evil"), nil)
+	if wrongLegacy.Code != http.StatusBadRequest {
+		t.Fatalf("wrong-path legacy override = %d", wrongLegacy.Code)
 	}
 
 	// 同源但路径不对：同样 400。

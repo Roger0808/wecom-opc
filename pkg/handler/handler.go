@@ -78,9 +78,19 @@ func (h *Handler) LoginRedirect(c *gin.Context) {
 	if override := c.Query("redirect_uri"); override != "" {
 		u, err := url.Parse(override)
 		base, berr := url.Parse(h.externalBaseURL())
-		if err != nil || berr != nil || u.Scheme != base.Scheme || u.Host != base.Host ||
-			u.Path != "/integration/v1/auth/callback" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "redirect_uri must be same-origin (server.external_base_url) /integration/v1/auth/callback"})
+		// 集成登录回跳：与对外规范地址同源且固定路径。
+		integrationOK := err == nil && berr == nil && u.Scheme == base.Scheme && u.Host == base.Host &&
+			u.Path == "/integration/v1/auth/callback"
+		// 既有 knowledge UI 企微登录回跳：与配置的 WeKnora 规范地址同源且固定路径
+		//（部署实测：H2 同源加固误伤了该既有流程，此处显式放行受信源）。
+		legacyOK := false
+		if err == nil {
+			wbase, wberr := url.Parse(h.cfg.WeKnora.BaseURL)
+			legacyOK = wberr == nil && wbase.Scheme != "" && u.Scheme == wbase.Scheme && u.Host == wbase.Host &&
+				u.Path == "/api/v1/auth/oidc/callback"
+		}
+		if !integrationOK && !legacyOK {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "redirect_uri must be same-origin (server.external_base_url) /integration/v1/auth/callback or weknora.base_url /api/v1/auth/oidc/callback"})
 			return
 		}
 		redirectURI = override
