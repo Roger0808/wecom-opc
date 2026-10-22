@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"weknora-tokendance/config"
@@ -23,6 +23,7 @@ import (
 	"weknora-tokendance/pkg/wecom"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
@@ -42,26 +43,16 @@ type Handler struct {
 
 	// 手动同步服务（TASK-P08）：/admin/api/sync/all 触发全量同步的唯一入口（走账本/锁/快照契约）
 	syncService *syncservice.Service
-
-	// 临时授权码缓存 (用于 OIDC /token 兑换)
-	authCodesLock sync.RWMutex
-	authCodes     map[string]*OIDCAuthSession
-}
-
-type OIDCAuthSession struct {
-	User      *model.WeKnoraUser
-	ExpiresAt time.Time
 }
 
 func NewHandler(cfg *config.Config, wecomClient wecomUserAPI, acClient *accountcenter.Client, syncer *syncer.Syncer, authSvc *auth.AuthService, storage *storage.Storage) *Handler {
 	return &Handler{
-		cfg:       cfg,
-		wecom:     wecomClient,
-		ac:        acClient,
-		syncer:    syncer,
-		auth:      authSvc,
-		storage:   storage,
-		authCodes: make(map[string]*OIDCAuthSession),
+		cfg:     cfg,
+		wecom:   wecomClient,
+		ac:      acClient,
+		syncer:  syncer,
+		auth:    authSvc,
+		storage: storage,
 	}
 }
 
@@ -450,23 +441,207 @@ func (h *Handler) OIDCAuthorize(c *gin.Context) {
 	h.LoginRedirect(c)
 }
 
-// OIDCToken 标准 OIDC Token 换取端点。
-// 历史占位实现曾返回随机 UUID 并在 userinfo 返回写死的假员工档案——
-// 部署实测（2026-10-22）knowledge 的 OIDC 客户端指向本网关时，任何企微扫码
-// 都会"登录成功"为假用户 employee@benlai.com 并被自动开户。占位端点必须
-// 失败关闭：真实 OIDC 供给未实现前，一律 501，禁止再产生幽灵会话。
-// 真正的企业登录走 /integration/v1/auth/*（INT-101）。
+// OIDCToken 标准 OIDC Token 换取端点（knowledge 侧 OIDC 客户端专用）。
+// 链路：企微 code → 企微 UserID → 统一账户中心员工档案 → 签发 10min HS256 JWT
+// （iss=platform-oidc，aud=client_id，sub=企微 UserID，email/name 出账户中心）。
+// 安全基线：未配置 oidc.client_id/client_secret 时 501 fail-closed（eab7450 行为）；
+// 账户中心查无此人一律 400 invalid_grant，绝不造用户、绝不降级假档案（防幽灵账号）。
 func (h *Handler) OIDCToken(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error":             "oidc_provider_not_implemented",
-		"error_description": "this gateway is not an OIDC provider; use /integration/v1/auth for enterprise login",
+	if !h.oidcConfigured() {
+		h.auditOIDC(c, "integration.oidc.token.denied", "oidc:anonymous", map[string]interface{}{
+			"result": "denied", "error": "oidc_provider_not_configured",
+		})
+		c.JSON(http.StatusNotImplemented, gin.H{
+			"error":             "oidc_provider_not_implemented",
+			"error_description": "oidc.client_id/client_secret not configured; this endpoint stays fail-closed",
+		})
+		return
+	}
+
+	deny := func(status int, errCode, description string, actor string, detail map[string]interface{}) {
+		if detail == nil {
+			detail = map[string]interface{}{}
+		}
+		detail["result"] = "denied"
+		detail["error"] = errCode
+		h.auditOIDC(c, "integration.oidc.token.denied", actor, detail)
+		if status == http.StatusUnauthorized {
+			c.Header("WWW-Authenticate", `Bearer realm="oidc"`)
+		}
+		c.JSON(status, gin.H{"error": errCode, "error_description": description})
+	}
+	issuedBy := "oidc:" + h.cfg.OIDC.ClientID
+
+	if err := c.Request.ParseForm(); err != nil {
+		deny(http.StatusBadRequest, "invalid_request", "failed to parse form body", issuedBy, nil)
+		return
+	}
+	if c.PostForm("grant_type") != "authorization_code" {
+		deny(http.StatusBadRequest, "unsupported_grant_type", "grant_type must be authorization_code", issuedBy, nil)
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(c.PostForm("client_id")), []byte(h.cfg.OIDC.ClientID)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(c.PostForm("client_secret")), []byte(h.cfg.OIDC.ClientSecret)) != 1 {
+		deny(http.StatusUnauthorized, "invalid_client", "client_id or client_secret mismatch", "oidc:unknown-client", nil)
+		return
+	}
+	code := c.PostForm("code")
+	if code == "" {
+		deny(http.StatusBadRequest, "invalid_request", "missing code", issuedBy, nil)
+		return
+	}
+	if !h.oidcRedirectURIAllowed(c.PostForm("redirect_uri")) {
+		deny(http.StatusBadRequest, "invalid_request", "redirect_uri must be same-origin (weknora.base_url) /api/v1/auth/oidc/callback", issuedBy, nil)
+		return
+	}
+
+	// 企微 code 换 UserID（复用 OAuthCallback 同一客户端与错误口径）；失败 400 invalid_grant。
+	userInfo, err := h.wecom.GetUserInfoByCode(code)
+	if err != nil || userInfo == nil || userInfo.UserID == "" {
+		deny(http.StatusBadRequest, "invalid_grant", "wecom code exchange failed or code already consumed", issuedBy, nil)
+		return
+	}
+
+	// 统一账户中心精确匹配（失败/未找到 → 400，绝不造用户、绝不兜底假邮箱）。
+	acUser, acErr := h.ac.GetUserByUnionNo(c.Request.Context(), userInfo.UserID)
+	if acErr != nil || acUser == nil {
+		log.Printf("[OIDC] account center lookup failed for %s: %v (deny, no user provisioning)", userInfo.UserID, acErr)
+		deny(http.StatusBadRequest, "invalid_grant", "subject unknown to account center", issuedBy, map[string]interface{}{
+			"subject": userInfo.UserID,
+		})
+		return
+	}
+	if acUser.Email == "" {
+		log.Printf("[OIDC] account center user %s (%s) has no email, denying OIDC login", acUser.ID, userInfo.UserID)
+		deny(http.StatusBadRequest, "invalid_grant", "subject has no email in account center", issuedBy, map[string]interface{}{
+			"subject": userInfo.UserID,
+		})
+		return
+	}
+
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"iss":   "platform-oidc",
+		"aud":   h.cfg.OIDC.ClientID,
+		"sub":   userInfo.UserID,
+		"email": acUser.Email,
+		"name":  acUser.UserName,
+		"iat":   now.Unix(),
+		"exp":   now.Add(10 * time.Minute).Unix(),
+		"jti":   uuid.NewString(),
+	}
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(h.cfg.Auth.Key))
+	if err != nil {
+		deny(http.StatusInternalServerError, "server_error", "failed to sign access token", issuedBy, nil)
+		return
+	}
+
+	h.auditOIDC(c, "integration.oidc.token.issued", "oidc:"+acUser.UnionNo, map[string]interface{}{
+		"result":  "issued",
+		"subject": userInfo.UserID,
+		"email":   acUser.Email,
+		"jti":     claims["jti"],
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"access_token": signed,
+		"token_type":   "Bearer",
+		"expires_in":   600,
 	})
 }
 
-// OIDCUserInfo 标准 OIDC UserInfo 端点（同上，失败关闭）。
+// OIDCUserInfo 标准 OIDC UserInfo 端点：校验 Bearer access_token（HS256 验签 +
+// iss/aud/exp），返回账户中心真实档案的 {sub, name, email}。无效 token 一律 401；
+// 未配置 OIDC 客户端凭据时 501 fail-closed。
 func (h *Handler) OIDCUserInfo(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error":             "oidc_provider_not_implemented",
-		"error_description": "this gateway is not an OIDC provider; no userinfo is available",
+	if !h.oidcConfigured() {
+		h.auditOIDC(c, "integration.oidc.userinfo.denied", "oidc:anonymous", map[string]interface{}{
+			"result": "denied", "error": "oidc_provider_not_configured",
+		})
+		c.JSON(http.StatusNotImplemented, gin.H{
+			"error":             "oidc_provider_not_implemented",
+			"error_description": "oidc.client_id/client_secret not configured; this endpoint stays fail-closed",
+		})
+		return
+	}
+
+	bearer := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+	if bearer == "" {
+		h.auditOIDC(c, "integration.oidc.userinfo.denied", "oidc:anonymous", map[string]interface{}{
+			"result": "denied", "error": "invalid_token",
+		})
+		c.Header("WWW-Authenticate", `Bearer realm="oidc", error="invalid_token"`)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token", "error_description": "missing bearer access_token"})
+		return
+	}
+
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(bearer, claims, func(tk *jwt.Token) (interface{}, error) {
+		return []byte(h.cfg.Auth.Key), nil
+	},
+		jwt.WithValidMethods([]string{"HS256"}),
+		jwt.WithIssuer("platform-oidc"),
+		jwt.WithAudience(h.cfg.OIDC.ClientID),
+	)
+	if err != nil || !token.Valid {
+		h.auditOIDC(c, "integration.oidc.userinfo.denied", "oidc:anonymous", map[string]interface{}{
+			"result": "denied", "error": "invalid_token",
+		})
+		c.Header("WWW-Authenticate", `Bearer realm="oidc", error="invalid_token"`)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token", "error_description": "access_token invalid or expired"})
+		return
+	}
+
+	sub, _ := claims["sub"].(string)
+	email, _ := claims["email"].(string)
+	name, _ := claims["name"].(string)
+	h.auditOIDC(c, "integration.oidc.userinfo.viewed", "oidc:"+sub, map[string]interface{}{
+		"result": "ok", "subject": sub, "email": email,
 	})
+	c.JSON(http.StatusOK, gin.H{
+		"sub":   sub,
+		"name":  name,
+		"email": email,
+	})
+}
+
+// oidcConfigured OIDC 端点启用判定：client_id 与 client_secret 均非空才视为已配置，
+// 否则保持 501 fail-closed（与 eab7450 占位行为一致）。
+func (h *Handler) oidcConfigured() bool {
+	return h.cfg != nil && h.cfg.OIDC.ClientID != "" && h.cfg.OIDC.ClientSecret != ""
+}
+
+// oidcRedirectURIAllowed 校验 token 请求的 redirect_uri：与配置的 WeKnora 规范地址
+// （weknora.base_url）同源且路径为 /api/v1/auth/oidc/callback（与 LoginRedirect
+// 放行的 knowledge 回跳一致）。只信配置，不信请求 Host / X-Forwarded-Host。
+func (h *Handler) oidcRedirectURIAllowed(redirectURI string) bool {
+	u, err := url.Parse(redirectURI)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	base, berr := url.Parse(h.cfg.WeKnora.BaseURL)
+	if berr != nil || base.Scheme == "" || base.Host == "" {
+		return false
+	}
+	return u.Scheme == base.Scheme && u.Host == base.Host && u.Path == "/api/v1/auth/oidc/callback"
+}
+
+// auditOIDC OIDC 端点审计落库（best-effort，失败只记日志；不存 client_secret 等敏感项）。
+func (h *Handler) auditOIDC(c *gin.Context, action, actor string, detail map[string]interface{}) {
+	if h.storage == nil {
+		return
+	}
+	after, _ := json.Marshal(detail)
+	event := &model.AuditEvent{
+		Actor:     actor,
+		Action:    action,
+		Target:    c.Request.Method + " " + c.FullPath(),
+		After:     string(after),
+		RequestID: c.GetHeader("X-Request-ID"),
+	}
+	if event.RequestID == "" {
+		event.RequestID = uuid.NewString()
+	}
+	if err := h.storage.InsertAuditEvent(c.Request.Context(), event); err != nil {
+		log.Printf("[OIDC] failed to write audit %s: %v", action, err)
+	}
 }

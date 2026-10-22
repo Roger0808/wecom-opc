@@ -23,6 +23,7 @@ type Config struct {
 	Admin        AdminConfig    `yaml:"admin"`
 	Auth         AuthConfig     `yaml:"auth"`
 	Bridge       BridgeConfig   `yaml:"bridge"`
+	OIDC         OIDCConfig     `yaml:"oidc"`
 	Code         CodeConfig     `yaml:"code"`
 	SystemAESKey string         `yaml:"system_aes_key"`
 }
@@ -49,6 +50,15 @@ type BridgeConfig struct {
 // 与 Admin.Key、WeKnora JWTSecret 完全分离。
 type AuthConfig struct {
 	Key string `yaml:"key"`
+}
+
+// OIDCConfig knowledge 侧 OIDC 客户端 (/oidc/token、/oidc/userinfo) 安全配置。
+// ClientID/ClientSecret 校验 knowledge 的令牌兑换请求；任一为空时两个端点保持
+// 501 fail-closed（与历史占位行为一致），不签发任何令牌。OIDC access_token 用
+// auth.key（HS256）签名，iss=platform-oidc，与平台自有令牌体系同源但独立 audience。
+type OIDCConfig struct {
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
 }
 
 // AdminConfig 管理后台 (/admin/api) 安全配置。
@@ -199,6 +209,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if envBridgeKey := os.Getenv("PLATFORM_BRIDGE_KEY"); envBridgeKey != "" {
 		cfg.Bridge.Key = envBridgeKey
+	}
+	if envOIDCClientID := os.Getenv("OIDC_CLIENT_ID"); envOIDCClientID != "" {
+		cfg.OIDC.ClientID = envOIDCClientID
+	}
+	if envOIDCClientSecret := os.Getenv("OIDC_CLIENT_SECRET"); envOIDCClientSecret != "" {
+		cfg.OIDC.ClientSecret = envOIDCClientSecret
 	}
 	if envCodeBase := os.Getenv("CODE_BASE_URL"); envCodeBase != "" {
 		cfg.Code.BaseURL = envCodeBase

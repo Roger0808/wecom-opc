@@ -194,3 +194,64 @@ bridge:
 		}
 	})
 }
+
+func TestLoadConfig_OIDC(t *testing.T) {
+	tempDir := t.TempDir()
+	yamlContent := `
+server:
+  port: 3002
+oidc:
+  client_id: "yaml-oidc-client"
+  client_secret: "yaml-oidc-secret"
+`
+	configPath := filepath.Join(tempDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	t.Run("loads oidc client credentials from yaml", func(t *testing.T) {
+		t.Setenv("OIDC_CLIENT_ID", "")
+		t.Setenv("OIDC_CLIENT_SECRET", "")
+		cfg, err := LoadConfig(configPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.OIDC.ClientID != "yaml-oidc-client" {
+			t.Errorf("expected yaml-oidc-client, got %q", cfg.OIDC.ClientID)
+		}
+		if cfg.OIDC.ClientSecret != "yaml-oidc-secret" {
+			t.Errorf("expected yaml-oidc-secret, got %q", cfg.OIDC.ClientSecret)
+		}
+	})
+
+	t.Run("env OIDC_CLIENT_ID/OIDC_CLIENT_SECRET overrides yaml", func(t *testing.T) {
+		t.Setenv("OIDC_CLIENT_ID", "env-oidc-client")
+		t.Setenv("OIDC_CLIENT_SECRET", "env-oidc-secret")
+		cfg, err := LoadConfig(configPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.OIDC.ClientID != "env-oidc-client" {
+			t.Errorf("expected env override env-oidc-client, got %q", cfg.OIDC.ClientID)
+		}
+		if cfg.OIDC.ClientSecret != "env-oidc-secret" {
+			t.Errorf("expected env override env-oidc-secret, got %q", cfg.OIDC.ClientSecret)
+		}
+	})
+
+	t.Run("unconfigured oidc stays empty (endpoints fail closed 501)", func(t *testing.T) {
+		t.Setenv("OIDC_CLIENT_ID", "")
+		t.Setenv("OIDC_CLIENT_SECRET", "")
+		emptyPath := filepath.Join(tempDir, "empty.yaml")
+		if err := os.WriteFile(emptyPath, []byte("server:\n  port: 3002\n"), 0644); err != nil {
+			t.Fatalf("failed to write temp config: %v", err)
+		}
+		cfg, err := LoadConfig(emptyPath)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.OIDC.ClientID != "" || cfg.OIDC.ClientSecret != "" {
+			t.Errorf("expected empty oidc config, got %+v", cfg.OIDC)
+		}
+	})
+}

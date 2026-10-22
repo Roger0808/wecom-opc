@@ -40,5 +40,12 @@ sync:
   enable_cron: true
   cron_schedule: "0 */30 * * *"             # 每30分钟自动全量同步一次企微组织架构
 
+# knowledge 侧 OIDC 客户端 (/oidc/token、/oidc/userinfo)：企微 code 兑换 10min JWT，
+# userinfo 返回账户中心真实 {sub, name, email}。两个字段任一为空时两个端点 501
+# fail-closed（不签发任何令牌）；真实值禁止入库，经 OIDC_CLIENT_ID/OIDC_CLIENT_SECRET 注入。
+oidc:
+  client_id: ""
+  client_secret: ""
+
 # WeKnora 敏感字段 AES-256-GCM 加密密钥 (32 字节)，与 WeKnora SYSTEM_AES_KEY 对齐（真实值禁止入库）
 system_aes_key: "change-me-32-byte-hex-key"
