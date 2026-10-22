@@ -82,13 +82,19 @@ func (s *Storage) FailStaleSyncRunsTx(tx *gorm.DB, scope, departmentCode string,
 }
 
 // CountLockedRunningSyncRunsTx 统计与新运行互斥且持锁中的运行中 run 数（可排除指定 run，
-// 供 Retry 排除自身）。
+// 供 Retry 排除自身）。excludeRunID 为空时不排除（创建路径，避免 uuid 空串比较在 PG 上
+// 22P02——sqlite 动态类型掩盖了该问题，部署实测暴露）。
 func (s *Storage) CountLockedRunningSyncRunsTx(tx *gorm.DB, scope, departmentCode string, now time.Time, excludeRunID string) (int64, error) {
 	predicate, args := conflictPredicate(scope, departmentCode)
 	query := `SELECT COUNT(*) FROM sync_runs
-		WHERE status IN ` + SyncRunRunningStatuses + ` AND lock_until > ? AND run_id <> ? AND ` + predicate
+		WHERE status IN ` + SyncRunRunningStatuses + ` AND lock_until > ? AND ` + predicate
+	params := append([]interface{}{now}, args...)
+	if excludeRunID != "" {
+		query += ` AND run_id <> ?`
+		params = append(params, excludeRunID)
+	}
 	var count int64
-	err := tx.Raw(query, append([]interface{}{now, excludeRunID}, args...)...).Scan(&count).Error
+	err := tx.Raw(query, params...).Scan(&count).Error
 	return count, err
 }
 
