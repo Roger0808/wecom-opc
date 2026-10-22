@@ -498,7 +498,17 @@ func (h *Handler) OIDCToken(c *gin.Context) {
 	// 企微 code 换 UserID（复用 OAuthCallback 同一客户端与错误口径）；失败 400 invalid_grant。
 	userInfo, err := h.wecom.GetUserInfoByCode(code)
 	if err != nil || userInfo == nil || userInfo.UserID == "" {
-		deny(http.StatusBadRequest, "invalid_grant", "wecom code exchange failed or code already consumed", issuedBy, nil)
+		reason := "wecom code exchange failed or code already consumed"
+		detail := map[string]interface{}{}
+		if err != nil {
+			reason = "wecom exchange error: " + sanitizeUpstreamErr(err)
+			detail["upstream"] = sanitizeUpstreamErr(err)
+		} else if userInfo != nil && userInfo.UserID == "" {
+			// 外部联系人/非本企业成员：getuserinfo 只回 OpenId，拿不到 UserID。
+			reason = "wecom account has no UserID (external contact or not an enterprise member; openid=" + userInfo.OpenID + ")"
+			detail["openid"] = userInfo.OpenID
+		}
+		deny(http.StatusBadRequest, "invalid_grant", reason, issuedBy, detail)
 		return
 	}
 
@@ -644,4 +654,13 @@ func (h *Handler) auditOIDC(c *gin.Context, action, actor string, detail map[str
 	if err := h.storage.InsertAuditEvent(c.Request.Context(), event); err != nil {
 		log.Printf("[OIDC] failed to write audit %s: %v", action, err)
 	}
+}
+
+// sanitizeUpstreamErr 把上游错误压成单行、限长，供审计与错误描述使用（不含密钥）。
+func sanitizeUpstreamErr(err error) string {
+	msg := strings.Join(strings.Fields(err.Error()), " ")
+	if len(msg) > 160 {
+		msg = msg[:160] + "…"
+	}
+	return msg
 }
