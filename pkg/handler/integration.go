@@ -436,16 +436,42 @@ func (h *IntegrationHandler) issueWorkTokens(c *gin.Context, ctx context.Context
 	// 受管技能目录按 opc/<tenant>/<publish_id> 命名；租户从该主体 active
 	// entitlement 集推导（与 INT-142 技能/知识桥同一来源），单租户直出、
 	// 多租户取排序首个（确定性），无授权租户时为空串由客户端按无技能处理。
+	// subject/spaces/authz_version 同包进响应：work 客户端据其渲染企业
+	// 区并初始化上下文（fake 平台一贯带这些字段，真平台此前漏发）。
 	link, err := h.storage.GetIdentityLink(ctx, *txn.IdentityLinkID)
 	if err != nil {
 		h.deny(c, http.StatusInternalServerError, errCodeInternal, "identity link missing", "client:"+txn.ClientID, auditTxnDetail(txn))
 		return
 	}
-	tenants, err := entitledTenants(ctx, h.storage, link.ImmutableSubject)
+	ents, err := h.storage.ListActiveManagedEntitlementsBySubject(ctx, link.ImmutableSubject)
 	if err != nil {
 		h.deny(c, http.StatusInternalServerError, errCodeInternal, "list entitlements failed", "client:"+txn.ClientID, auditTxnDetail(txn))
 		return
 	}
+	tenantSet := make(map[string]struct{}, len(ents))
+	capSet := make(map[string]struct{}, len(ents))
+	authzVersion := int64(0)
+	for _, e := range ents {
+		if e.TenantID != "" {
+			tenantSet[e.TenantID] = struct{}{}
+		}
+		if e.Capability != "" {
+			capSet[e.Capability] = struct{}{}
+		}
+		if e.AuthzVersion > authzVersion {
+			authzVersion = e.AuthzVersion
+		}
+	}
+	tenants := make([]string, 0, len(tenantSet))
+	for t := range tenantSet {
+		tenants = append(tenants, t)
+	}
+	sort.Strings(tenants)
+	capabilities := make([]string, 0, len(capSet))
+	for cap := range capSet {
+		capabilities = append(capabilities, cap)
+	}
+	sort.Strings(capabilities)
 	tenant := ""
 	if len(tenants) > 0 {
 		tenant = tenants[0]
@@ -464,6 +490,10 @@ func (h *IntegrationHandler) issueWorkTokens(c *gin.Context, ctx context.Context
 		"access_token":  accessJWT,
 		"refresh_token": refreshJWT,
 		"expires_in":    int(accessTokenTTL.Seconds()),
+		"subject":       link.ImmutableSubject,
+		"spaces":        tenants,
+		"authz_version": authzVersion,
+		"capabilities":  capabilities,
 		"tenant":        tenant,
 		"tenants":       tenants,
 	})
