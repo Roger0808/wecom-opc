@@ -782,7 +782,7 @@ func (h *IntegrationHandler) CodeExchange(c *gin.Context) {
 		h.deny(c, http.StatusUnauthorized, errCodeSessionRevoked, "missing service bearer token", "anonymous", nil)
 		return
 	}
-	svcClaims, err := adminauth.ParseToken([]byte(h.cfg.Admin.Key), raw)
+	svcClaims, err := adminauth.ParseServiceCredential(h.cfg.Admin.Key, h.cfg.Server.ServiceToken, raw)
 	if err != nil {
 		h.deny(c, http.StatusUnauthorized, errCodeSessionRevoked, "invalid service token: "+err.Error(), "anonymous", nil)
 		return

@@ -214,3 +214,27 @@ func TestOriginMatching(t *testing.T) {
 		}
 	})
 }
+
+func TestParseServiceCredentialSharedToken(t *testing.T) {
+	key := []byte("test-service-key-0123456789abcdef")
+	jwtTok, err := IssueToken(key, "svc-jwt", RoleSystemAdmin, 0, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("issue jwt: %v", err)
+	}
+	// JWT 形态仍可用
+	if c, err := ParseServiceCredential(string(key), "shared-raw", jwtTok); err != nil || c.Role != RoleSystemAdmin {
+		t.Fatalf("jwt path: %v %+v", err, c)
+	}
+	// 共享原始 token 形态
+	if c, err := ParseServiceCredential(string(key), "shared-raw", "shared-raw"); err != nil || c.Role != RoleSystemAdmin {
+		t.Fatalf("raw path: %v %+v", err, c)
+	}
+	// 错误值拒
+	if _, err := ParseServiceCredential(string(key), "shared-raw", "nope"); err == nil {
+		t.Fatal("garbage must be rejected")
+	}
+	// 未配置共享 token 时原始值拒
+	if _, err := ParseServiceCredential(string(key), "", "shared-raw"); err == nil {
+		t.Fatal("raw without configured shared token must be rejected")
+	}
+}

@@ -81,6 +81,10 @@ type ServerConfig struct {
 	// 不再信请求 Host / X-Forwarded-Host（可伪造）。env EXTERNAL_BASE_URL 覆盖；
 	// 启动强制非空（main.go fail-fast）。
 	ExternalBaseURL string `yaml:"external_base_url"`
+	// ServiceToken 与 code 后端的 PLATFORM_SERVICE_TOKEN 共享：原始共享令牌
+	// 作为服务身份的第二种可接受形态（JWT 之外的常量时间比对），用于 code
+	// 后端调 code-exchange 等仅服务可达端点。env PLATFORM_SERVICE_TOKEN 覆盖。
+	ServiceToken string `yaml:"service_token"`
 }
 
 type WeComConfig struct {

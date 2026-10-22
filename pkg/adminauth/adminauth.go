@@ -18,6 +18,8 @@ package adminauth
 
 import (
 	"context"
+	"crypto/subtle"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -344,4 +346,18 @@ func recordAudit(fn AuditFunc, ctx context.Context, event *model.AuditEvent) {
 	if err := fn(ctx, event); err != nil {
 		log.Printf("[AdminAuth] failed to write audit event %s: %v", event.Action, err)
 	}
+}
+
+// ParseServiceCredential 解析服务身份凭据：优先按 HS256 JWT（Admin.Key 签发、
+// system_admin 角色）；不匹配且配置了共享服务令牌时，退化为常量时间比对并
+// 合成等价 claims。覆盖 code 后端持原始 PLATFORM_SERVICE_TOKEN 的调用形态
+//（联调实测：code 发送共享令牌而非 JWT，旧实现一律按 JWT 解析而拒绝）。
+func ParseServiceCredential(adminKey, sharedToken, raw string) (*Claims, error) {
+	if claims, err := ParseToken([]byte(adminKey), raw); err == nil {
+		return claims, nil
+	}
+	if sharedToken != "" && subtle.ConstantTimeCompare([]byte(raw), []byte(sharedToken)) == 1 {
+		return &Claims{Role: RoleSystemAdmin, RegisteredClaims: jwt.RegisteredClaims{Subject: "service:platform-shared"}}, nil
+	}
+	return nil, errors.New("invalid service token")
 }
