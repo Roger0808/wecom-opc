@@ -432,6 +432,25 @@ func (h *IntegrationHandler) issueWorkTokens(c *gin.Context, ctx context.Context
 		return
 	}
 
+	// work 桌面上下文键 = issuer|subject|tenant|generation（DATA-120c），
+	// 受管技能目录按 opc/<tenant>/<publish_id> 命名；租户从该主体 active
+	// entitlement 集推导（与 INT-142 技能/知识桥同一来源），单租户直出、
+	// 多租户取排序首个（确定性），无授权租户时为空串由客户端按无技能处理。
+	link, err := h.storage.GetIdentityLink(ctx, *txn.IdentityLinkID)
+	if err != nil {
+		h.deny(c, http.StatusInternalServerError, errCodeInternal, "identity link missing", "client:"+txn.ClientID, auditTxnDetail(txn))
+		return
+	}
+	tenants, err := entitledTenants(ctx, h.storage, link.ImmutableSubject)
+	if err != nil {
+		h.deny(c, http.StatusInternalServerError, errCodeInternal, "list entitlements failed", "client:"+txn.ClientID, auditTxnDetail(txn))
+		return
+	}
+	tenant := ""
+	if len(tenants) > 0 {
+		tenant = tenants[0]
+	}
+
 	h.audit(ctx, *txn.IdentityLinkID, "integration.auth.token.issued", "POST /integration/v1/auth/token", map[string]interface{}{
 		"result":       "allowed",
 		"login_txn_id": txn.LoginTxnID,
@@ -445,6 +464,8 @@ func (h *IntegrationHandler) issueWorkTokens(c *gin.Context, ctx context.Context
 		"access_token":  accessJWT,
 		"refresh_token": refreshJWT,
 		"expires_in":    int(accessTokenTTL.Seconds()),
+		"tenant":        tenant,
+		"tenants":       tenants,
 	})
 }
 
