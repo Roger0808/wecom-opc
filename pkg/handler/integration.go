@@ -32,6 +32,7 @@ import (
 	"weknora-tokendance/pkg/accountcenter"
 	"weknora-tokendance/pkg/adminauth"
 	"weknora-tokendance/pkg/identity"
+	"weknora-tokendance/pkg/kbridge"
 	"weknora-tokendance/pkg/model"
 	"weknora-tokendance/pkg/storage"
 	"weknora-tokendance/pkg/wecom"
@@ -899,6 +900,13 @@ func (h *IntegrationHandler) CodeExchange(c *gin.Context) {
 		h.deny(c, http.StatusInternalServerError, errCodeInternal, "identity link missing", svcClaims.Subject, nil)
 		return
 	}
+	// 真实姓名/邮箱取自 knowledge 用户行（identity link 的供给目标），
+	// 让 code 后端把占位 enterprise-<subject>@platform.local 换成企业身份
+	// 展示；解析失败留空，客户端回退占位值，不阻断兑换。
+	email, displayName := "", ""
+	if ku, uerr := kbridge.NewWeKnoraStore(h.storage).GetUserByID(ctx, link.KnowledgeUserID); uerr == nil && ku != nil {
+		email, displayName = ku.Email, ku.Username
+	}
 	ents, err := h.storage.ListActiveManagedEntitlementsBySubject(ctx, link.ImmutableSubject)
 	if err != nil {
 		h.deny(c, http.StatusInternalServerError, errCodeInternal, "list entitlements failed", svcClaims.Subject, nil)
@@ -943,6 +951,8 @@ func (h *IntegrationHandler) CodeExchange(c *gin.Context) {
 		"code_user_id":      codeUserIDValue(link.CodeUserID),
 		"spaces":            spaces,
 		"authz_version":     authzVersion,
+		"email":             email,
+		"name":              displayName,
 	})
 }
 
