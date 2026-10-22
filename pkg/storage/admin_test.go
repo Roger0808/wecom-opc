@@ -522,4 +522,3 @@ func TestUpdateRootModelsBatch(t *testing.T) {
 		t.Errorf("expected m2 to be renamed, got %s", m2.Name)
 	}
 }
-
