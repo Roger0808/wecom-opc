@@ -217,6 +217,60 @@ func (u *knowledgeUpstream) getKnowledge(ctx context.Context, bearer, id string)
 	return u.invoke(ctx, http.MethodGet, "/api/v1/knowledge/"+id, bearer, nil)
 }
 
+// upstreamKB knowledge 知识库视图最小子集（INT-120a 跨库检索的列表项）。
+// 解析对字段名宽容：knowledge 列表行既有 id/name 也有
+// knowledge_base_id/knowledge_base_name 形态（列表视图带 share 包装）。
+type upstreamKB struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (k *upstreamKB) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ID                  string `json:"id"`
+		Name                string `json:"name"`
+		KnowledgeBaseID     string `json:"knowledge_base_id"`
+		KnowledgeBaseName   string `json:"knowledge_base_name"`
+		Nested              *struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"knowledge_base"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	k.ID = wire.ID
+	if k.ID == "" {
+		k.ID = wire.KnowledgeBaseID
+	}
+	k.Name = wire.Name
+	if k.Name == "" {
+		k.Name = wire.KnowledgeBaseName
+	}
+	if k.ID == "" && wire.Nested != nil {
+		k.ID = wire.Nested.ID
+		k.Name = wire.Nested.Name
+	}
+	return nil
+}
+
+// listKnowledgeBases GET /api/v1/knowledge-bases：返回上游身份（兼容桥个人
+// token，已绑定目标租户）在该租户内可见的知识库列表。invoke 已拆统一
+// 信封，这里直接解析 data 数组。
+func (u *knowledgeUpstream) listKnowledgeBases(ctx context.Context, bearer string) ([]upstreamKB, error) {
+	data, err := u.invoke(ctx, http.MethodGet, "/api/v1/knowledge-bases", bearer, nil)
+	if err != nil {
+		return nil, err
+	}
+	var kbs []upstreamKB
+	if len(data) > 0 && string(data) != "null" {
+		if err := json.Unmarshal(data, &kbs); err != nil {
+			return nil, fmt.Errorf("decode knowledge base list: %w", err)
+		}
+	}
+	return kbs, nil
+}
+
 // downloadKnowledgeFile GET /api/v1/knowledge/:id/download（原文件，knowledge
 // Contributor+KBAccessWrite；Viewer 命中 403 由调用方透传 SPACE_FORBIDDEN）。
 func (u *knowledgeUpstream) downloadKnowledgeFile(ctx context.Context, bearer, id string) (io.ReadCloser, http.Header, error) {

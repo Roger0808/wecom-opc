@@ -249,3 +249,67 @@ func TestKnowledgeFile_NotVisibleAnywhere(t *testing.T) {
 		t.Fatalf("not visible file = %d/%s", w.Code, errorCode(t, w))
 	}
 }
+
+// TestKnowledgeSearch_MultiKBMerge 缺省 knowledge_base_id 时按租户内全部
+// 可见 KB 检索并合并：逐库 hybrid-search、命中带 knowledge_base_id/name、
+// 按 score 降序截断。
+func TestKnowledgeSearch_MultiKBMerge(t *testing.T) {
+	fake := newFakeKnowledge()
+	fake.kbList = []map[string]interface{}{
+		{"id": "kb-a", "name": "库A"},
+		{"id": "kb-b", "name": "库B"},
+	}
+	fake.searchHits = []map[string]interface{}{
+		{"id": "chunk-1", "knowledge_id": "kn-1", "knowledge_title": "离职交接", "content": "c1", "score": 0.91},
+	}
+	r, s, _ := setupKnowledgeEnv(t, fake)
+	link := seedKnowledgeSubject(t, s, "subj-k", "ku-k", "1001")
+
+	w := doPostJSON(t, r, "/integration/v1/knowledge/search", gin.H{
+		"tenant_id": "1001", "query": "离职",
+	}, platformAccessHeaders(t, s, link.ID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("search = %d, body=%s", w.Code, w.Body.String())
+	}
+	body := decodeBody(t, w)
+	results, ok := body["results"].([]interface{})
+	if !ok || len(results) != 2 {
+		t.Fatalf("results = %v", body["results"])
+	}
+	kbIDs := map[string]bool{}
+	for _, raw := range results {
+		hit := raw.(map[string]interface{})
+		kbIDs[hit["knowledge_base_id"].(string)] = true
+		if hit["knowledge_base_name"] == "" {
+			t.Fatalf("hit missing kb name: %v", hit)
+		}
+	}
+	if !kbIDs["kb-a"] || !kbIDs["kb-b"] {
+		t.Fatalf("merged kb coverage = %v", kbIDs)
+	}
+	fake.mu.Lock()
+	hybridCalls := 0
+	for _, entry := range fake.requestLog {
+		if strings.HasPrefix(entry, "hybrid-search ") {
+			hybridCalls++
+		}
+	}
+	fake.mu.Unlock()
+	if hybridCalls != 2 {
+		t.Fatalf("hybrid-search calls = %d, want 2", hybridCalls)
+	}
+}
+
+// TestKnowledgeSearch_TenantWithoutKB 缺省 knowledge_base_id 且租户无库 → 404。
+func TestKnowledgeSearch_TenantWithoutKB(t *testing.T) {
+	fake := newFakeKnowledge()
+	fake.kbList = []map[string]interface{}{}
+	r, s, _ := setupKnowledgeEnv(t, fake)
+	link := seedKnowledgeSubject(t, s, "subj-k", "ku-k", "1001")
+	w := doPostJSON(t, r, "/integration/v1/knowledge/search", gin.H{
+		"tenant_id": "1001", "query": "离职",
+	}, platformAccessHeaders(t, s, link.ID))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("empty tenant search = %d, body=%s", w.Code, w.Body.String())
+	}
+}

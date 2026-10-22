@@ -220,13 +220,15 @@ type knowledgeSearchRequest struct {
 
 // searchHit 规范化检索命中（BND-180/INT-120：knowledge_id/chunk_id/title/locator/source_tenant）。
 type searchHit struct {
-	KnowledgeID  string      `json:"knowledge_id"`
-	ChunkID      string      `json:"chunk_id"`
-	Title        string      `json:"title"`
-	Locator      *hitLocator `json:"locator,omitempty"`
-	SourceTenant string      `json:"source_tenant"`
-	Content      string      `json:"content,omitempty"`
-	Score        float64     `json:"score,omitempty"`
+	KnowledgeID       string      `json:"knowledge_id"`
+	ChunkID           string      `json:"chunk_id"`
+	Title             string      `json:"title"`
+	Locator           *hitLocator `json:"locator,omitempty"`
+	SourceTenant      string      `json:"source_tenant"`
+	KnowledgeBaseID   string      `json:"knowledge_base_id,omitempty"`
+	KnowledgeBaseName string      `json:"knowledge_base_name,omitempty"`
+	Content           string      `json:"content,omitempty"`
+	Score             float64     `json:"score,omitempty"`
 }
 
 type hitLocator struct {
@@ -253,8 +255,8 @@ func (h *KnowledgeHandler) Search(c *gin.Context) {
 	if tenant == "" {
 		tenant = req.Space
 	}
-	if tenant == "" || req.KnowledgeBaseID == "" || strings.TrimSpace(req.Query) == "" {
-		writeErrorEnvelope(c, http.StatusBadRequest, errCodeInvalidRequest, "tenant_id, knowledge_base_id and query are required")
+	if tenant == "" || strings.TrimSpace(req.Query) == "" {
+		writeErrorEnvelope(c, http.StatusBadRequest, errCodeInvalidRequest, "tenant_id and query are required")
 		return
 	}
 
@@ -269,22 +271,70 @@ func (h *KnowledgeHandler) Search(c *gin.Context) {
 	if len(req.KnowledgeIDs) > 0 {
 		upstreamBody["knowledge_ids"] = req.KnowledgeIDs
 	}
-	hits, err := h.upstream.hybridSearch(ctx, token, req.KnowledgeBaseID, upstreamBody)
-	if err != nil {
-		denyUpstream(c, err)
-		return
+
+	// knowledge_base_id 缺省时按"租户内全部可见知识库"检索：上游列表
+	// （桥 token 已绑定租户，Viewer 级）→ 逐库 hybrid-search → 按 score
+	// 合并。租户内单库时行为与显式指定一致；多库时一次回答覆盖全租户。
+	defaultLimit := 10
+	if req.MatchCount > 0 {
+		defaultLimit = req.MatchCount
+	}
+	type kbHit struct {
+		kb  upstreamKB
+		hit upstreamSearchHit
+	}
+	merged := make([]kbHit, 0, defaultLimit)
+	searchKBs := []upstreamKB{{ID: req.KnowledgeBaseID}}
+	if req.KnowledgeBaseID == "" {
+		kbs, lerr := h.upstream.listKnowledgeBases(ctx, token)
+		if lerr != nil {
+			denyUpstream(c, lerr)
+			return
+		}
+		if len(kbs) == 0 {
+			writeErrorEnvelope(c, http.StatusNotFound, errCodeInvalidRequest, "tenant has no knowledge base")
+			return
+		}
+		searchKBs = kbs
+	}
+	for _, kb := range searchKBs {
+		if kb.ID == "" {
+			continue
+		}
+		hits, err := h.upstream.hybridSearch(ctx, token, kb.ID, upstreamBody)
+		if err != nil {
+			denyUpstream(c, err)
+			return
+		}
+		for _, hit := range hits {
+			merged = append(merged, kbHit{kb: kb, hit: hit})
+		}
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		return merged[i].hit.Score > merged[j].hit.Score
+	})
+	if len(merged) > defaultLimit {
+		merged = merged[:defaultLimit]
 	}
 
-	results := make([]searchHit, 0, len(hits))
-	for _, hit := range hits {
+	results := make([]searchHit, 0, len(merged))
+	kbNames := make([]string, 0, len(searchKBs))
+	for _, kb := range searchKBs {
+		if kb.ID != "" {
+			kbNames = append(kbNames, kb.ID)
+		}
+	}
+	for _, m := range merged {
 		results = append(results, searchHit{
-			KnowledgeID:  hit.KnowledgeID,
-			ChunkID:      hit.ID,
-			Title:        hit.KnowledgeTitle,
-			Locator:      &hitLocator{StartAt: hit.StartAt, EndAt: hit.EndAt, ChunkIndex: hit.ChunkIndex, Seq: hit.Seq},
-			SourceTenant: tenant,
-			Content:      hit.Content,
-			Score:        hit.Score,
+			KnowledgeID:       m.hit.KnowledgeID,
+			ChunkID:           m.hit.ID,
+			Title:             m.hit.KnowledgeTitle,
+			Locator:           &hitLocator{StartAt: m.hit.StartAt, EndAt: m.hit.EndAt, ChunkIndex: m.hit.ChunkIndex, Seq: m.hit.Seq},
+			SourceTenant:      tenant,
+			KnowledgeBaseID:   m.kb.ID,
+			KnowledgeBaseName: m.kb.Name,
+			Content:           m.hit.Content,
+			Score:             m.hit.Score,
 		})
 	}
 
@@ -292,6 +342,7 @@ func (h *KnowledgeHandler) Search(c *gin.Context) {
 		"result":            "allowed",
 		"tenant_id":         tenant,
 		"knowledge_base_id": req.KnowledgeBaseID,
+		"knowledge_bases":   len(searchKBs),
 		"hits":              len(results),
 	})
 

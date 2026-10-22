@@ -47,6 +47,7 @@ type fakeKnowledge struct {
 	fileStatus          map[string]int             // "<tenant>:<id>" → 强制状态码
 	releaseByID         map[string]map[string]interface{}
 	releaseListByTenant map[string][]map[string]interface{}
+	kbList              []map[string]interface{} // 显式 KB 列表（缺省单占位库）
 	metadataStatus      map[string]int // release id → 强制元数据状态码
 	archiveBytes        map[string][]byte
 	archiveStatus       map[string]int // release id → 强制状态码
@@ -112,10 +113,25 @@ func releaseVisibleInTenant(release map[string]interface{}, tenant string) bool 
 
 func (f *fakeKnowledge) handler(t *testing.T) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/knowledge-bases", f.handleKBList)
 	mux.HandleFunc("/api/v1/knowledge-bases/", f.handleHybridSearch)
 	mux.HandleFunc("/api/v1/skills/", f.handleSkills)
 	mux.HandleFunc("/api/v1/knowledge/", f.handleKnowledge)
 	return mux
+}
+
+// handleKBList GET /api/v1/knowledge-bases：返回 fake 的 KB 列表（无列表时
+// 退化为单个占位库，保证缺省 knowledge_base_id 的旧用例仍按单库路径走）。
+func (f *fakeKnowledge) handleKBList(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	kbs := f.kbList
+	f.requestLog = append(f.requestLog, "kb-list tenant="+bearerTenant(r))
+	f.mu.Unlock()
+	if kbs == nil {
+		kbs = []map[string]interface{}{{"id": "kb-default", "name": "默认知识库"}}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "data": kbs})
 }
 
 func (f *fakeKnowledge) handleHybridSearch(w http.ResponseWriter, r *http.Request) {
