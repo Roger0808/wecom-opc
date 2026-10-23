@@ -58,7 +58,6 @@ func migrateStateSchema(t *testing.T, stateDB *gorm.DB) {
 		&model.ManagedEntitlement{},
 		&model.SyncRun{},
 		&model.SyncStep{},
-		&model.SkillPublishJob{},
 		&model.AuthzEpoch{},
 	); err != nil {
 		t.Fatalf("failed to auto migrate state schema: %v", err)
@@ -96,7 +95,7 @@ func embeddedUpMigrations(t *testing.T) []string {
 var platformTables = []string{
 	"audit_events", "identity_links", "auth_transactions",
 	"sessions", "runtime_grants", "workspace_links", "managed_entitlements",
-	"sync_runs", "sync_steps", "skill_publish_jobs",
+	"sync_runs", "sync_steps",
 }
 
 // TestRunMigrations_UpDownUp_Idempotent 用真实内嵌迁移 SQL 验证 up→down→up 幂等，
@@ -229,16 +228,6 @@ func TestUniqueConstraints_FromMigrationSQL(t *testing.T) {
 
 	t.Run("sync_runs.idempotency_key", func(t *testing.T) {
 		base := `INSERT INTO sync_runs (run_id, scope, idempotency_key, rule_version, triggered_by, status) VALUES ('%s','full','idem-001','v1','admin:test','queued')`
-		if err := exec(fmt.Sprintf(base, uuid.New().String())); err != nil {
-			t.Fatalf("first insert failed: %v", err)
-		}
-		if err := exec(fmt.Sprintf(base, uuid.New().String())); err == nil {
-			t.Fatalf("expected unique constraint violation")
-		}
-	})
-
-	t.Run("skill_publish_jobs.idempotency_key", func(t *testing.T) {
-		base := `INSERT INTO skill_publish_jobs (job_id, release_id, source_tenant, targets, idempotency_key, status) VALUES ('%s','release-1','tenant-10001','[{"tenant_id":"t2"}]','publish-001','queued')`
 		if err := exec(fmt.Sprintf(base, uuid.New().String())); err != nil {
 			t.Fatalf("first insert failed: %v", err)
 		}
@@ -535,39 +524,6 @@ func TestSyncRunsAndSteps_RoundTrip(t *testing.T) {
 	steps, err := s.ListSyncSteps(ctx, run.RunID)
 	if err != nil || len(steps) != 2 || steps[0].StepSeq != 1 || steps[1].StepSeq != 2 {
 		t.Fatalf("ListSyncSteps = %v, %v", steps, err)
-	}
-}
-
-func TestSkillPublishJobs_RoundTrip(t *testing.T) {
-	s, _, _ := setupStateTestStorage(t)
-	migrateStateSchema(t, s.stateDB)
-	ctx := context.Background()
-
-	job := &model.SkillPublishJob{
-		ReleaseID:      "release-1",
-		SourceTenant:   "tenant-10001",
-		Targets:        `[{"tenant_id":"t2"},{"tenant_id":"t3"}]`,
-		IdempotencyKey: "publish-001",
-		Status:         "queued",
-		Steps:          strPtr(`[{"tenant_id":"t2","status":"succeeded"}]`),
-	}
-	if err := s.InsertSkillPublishJob(ctx, job); err != nil {
-		t.Fatalf("InsertSkillPublishJob failed: %v", err)
-	}
-	got, err := s.GetSkillPublishJob(ctx, job.JobID)
-	if err != nil {
-		t.Fatalf("GetSkillPublishJob failed: %v", err)
-	}
-	if got.ReleaseID != job.ReleaseID || got.Targets != job.Targets || got.Status != "queued" {
-		t.Errorf("round-trip mismatch: got %+v", got)
-	}
-	if got.Steps == nil || *got.Steps != *job.Steps {
-		t.Errorf("steps mismatch: got %+v", got)
-	}
-
-	jobs, err := s.ListSkillPublishJobs(ctx)
-	if err != nil || len(jobs) != 1 {
-		t.Fatalf("ListSkillPublishJobs = %d, %v", len(jobs), err)
 	}
 }
 

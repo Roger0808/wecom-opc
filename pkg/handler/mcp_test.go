@@ -127,7 +127,7 @@ func setupMCPEnv(t *testing.T) (*gin.Engine, *storage.Storage, *fakeMCP) {
 	if err := mainDB.AutoMigrate(&model.WeKnoraUser{}, &model.WeKnoraTenantMember{}, &model.WeKnoraAuthToken{}); err != nil {
 		t.Fatalf("migrate main: %v", err)
 	}
-	if err := stateDB.AutoMigrate(&model.IdentityLink{}, &model.ManagedEntitlement{}, &model.Session{}, &model.AuditEvent{}, &model.SkillPublishJob{}); err != nil {
+	if err := stateDB.AutoMigrate(&model.IdentityLink{}, &model.ManagedEntitlement{}, &model.Session{}, &model.AuditEvent{}); err != nil {
 		t.Fatalf("migrate state: %v", err)
 	}
 	s := storage.NewStorageWithDBs(mainDB, stateDB)
@@ -136,16 +136,12 @@ func setupMCPEnv(t *testing.T) (*gin.Engine, *storage.Storage, *fakeMCP) {
 	fake := newFakeMCP()
 	mux.Handle("/api/v1/integration/mcp/", fake)
 	knowledgeMux := (&fakeKnowledge{
-		searchStatus:        http.StatusOK,
-		knowledgeData:       map[string]json.RawMessage{},
-		knowledgeCode:       map[string]int{},
-		fileBytes:           map[string][]byte{},
-		fileStatus:          map[string]int{},
-		releaseByID:         map[string]map[string]interface{}{},
-		releaseListByTenant: map[string][]map[string]interface{}{},
-		metadataStatus:      map[string]int{},
-		archiveBytes:        map[string][]byte{},
-		archiveStatus:       map[string]int{},
+		searchStatus:   http.StatusOK,
+		knowledgeData:  map[string]json.RawMessage{},
+		knowledgeCode:  map[string]int{},
+		fileBytes:      map[string][]byte{},
+		fileStatus:     map[string]int{},
+		knowledgeAttrs: map[string]map[string]interface{}{},
 	}).handler(t)
 	mux.Handle("/api/v1/knowledge-bases/", knowledgeMux)
 	mux.Handle("/api/v1/skills/", knowledgeMux)

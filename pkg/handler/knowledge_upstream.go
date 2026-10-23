@@ -1,9 +1,10 @@
-// TASK-P07/P10 上游 knowledge REST 客户端（INT-120/INT-142 共用）。
+// WORK-RESOURCES-001（TASK-009/010/011）上游 knowledge REST 客户端。
 //
 // 只走 knowledge 个人 JWT REST（ADR-006）：桥签发的短时上游 token 作 Bearer，
 // base URL 复用 cfg.WeKnora.BaseURL。knowledge 响应统一包 {success, data}，
 // 错误包 {success:false, error:{code,message}}（或 AppError 中间件的
 // {error:{code,message}} 形态），客户端按状态码 + code 透传映射。
+// 目录契约（/api/v1/skills/catalog*）不查询 release/发布状态（BND-010）。
 package handler
 
 import (
@@ -15,12 +16,20 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
 // upstreamTimeout 桥/上游不可用的判定阈值（P07：15s 超时 → 502 UPSTREAM_UNAVAILABLE）。
 // 生产固定 15s；测试可临时改小构造超时场景（包内单测，非并发用例）。
 var upstreamTimeout = 15 * time.Second
+
+// 归档下载独立预算（BND-105/INT-105）：总预算 120s、连接/无进度等待 ≤15s，
+// 不复用元数据的 15s 超时（避免误杀大包）。测试可临时改小构造超时场景。
+var (
+	archiveDownloadTotalBudget = 120 * time.Second
+	archiveDownloadIdleTimeout = 15 * time.Second
+)
 
 // errUpstreamUnavailable 表示 knowledge 传输层不可达（超时/连接失败）。
 var errUpstreamUnavailable = errors.New("upstream knowledge unavailable")
@@ -49,13 +58,35 @@ type upstreamResponse struct {
 // knowledgeUpstream knowledge 个人 REST 客户端（零值不可直接用，经 newKnowledgeUpstream 构造）。
 type knowledgeUpstream struct {
 	baseURL string
-	client  *http.Client
+	// client 元数据/检索用：整体 15s 超时。
+	client *http.Client
+	// downloadClient 归档下载专用：无整体 Timeout（总预算由调用方 ctx 控），
+	// 首包/连接等待 15s；传输层读 idle 由 idleReader 兜底。
+	downloadClient *http.Client
+}
+
+// newMetadataClient 构造元数据/检索用 HTTP client（15s 整体超时；测试可在
+// 装配环境前替换以构造超时场景）。
+var newMetadataClient = func() *http.Client {
+	return &http.Client{Timeout: upstreamTimeout}
+}
+
+// newDownloadClient 构造归档下载专用 client：首包/连接等待
+// archiveDownloadIdleTimeout；无整体 Timeout（总预算由调用方 ctx 控制，
+// 默认 archiveDownloadTotalBudget）。测试可在装配环境前替换。
+var newDownloadClient = func() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: archiveDownloadIdleTimeout,
+		},
+	}
 }
 
 func newKnowledgeUpstream(baseURL string) *knowledgeUpstream {
 	return &knowledgeUpstream{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		client:  &http.Client{Timeout: upstreamTimeout},
+		baseURL:        strings.TrimRight(baseURL, "/"),
+		client:         newMetadataClient(),
+		downloadClient: newDownloadClient(),
 	}
 }
 
@@ -227,11 +258,11 @@ type upstreamKB struct {
 
 func (k *upstreamKB) UnmarshalJSON(data []byte) error {
 	var wire struct {
-		ID                  string `json:"id"`
-		Name                string `json:"name"`
-		KnowledgeBaseID     string `json:"knowledge_base_id"`
-		KnowledgeBaseName   string `json:"knowledge_base_name"`
-		Nested              *struct {
+		ID                string `json:"id"`
+		Name              string `json:"name"`
+		KnowledgeBaseID   string `json:"knowledge_base_id"`
+		KnowledgeBaseName string `json:"knowledge_base_name"`
+		Nested            *struct {
 			ID   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"knowledge_base"`
@@ -281,54 +312,151 @@ func (u *knowledgeUpstream) downloadKnowledgeFile(ctx context.Context, bearer, i
 	return body, header, nil
 }
 
-// ---------- EXT-001 技能 release 契约 ----------
+// ---------- WORK-RESOURCES-001 目录契约（INT-101/103，不经过 release） ----------
 
-// upstreamRelease knowledge skill_release 视图（INT-140b/c 元数据子集）。
-type upstreamRelease struct {
-	ID            string          `json:"id"`
-	CatalogID     string          `json:"catalog_id"`
-	Version       string          `json:"version"`
-	BundleSHA256  string          `json:"bundle_sha256"`
-	Manifest      json.RawMessage `json:"manifest"`
-	TargetTenants []uint64        `json:"target_tenants"`
-	TargetRoles   []string        `json:"target_roles"`
-	Status        string          `json:"status"`
+// upstreamCatalog knowledge /api/v1/skills/catalog 目录视图（INT-101 元数据子集；
+// 对应 knowledge service.SkillCatalogView 的 JSON 形态）。
+type upstreamCatalog struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Version      string `json:"version"`
+	Description  string `json:"description"`
+	BundleSHA256 string `json:"bundle_sha256"`
 }
 
-// listSkillReleases GET /api/v1/skills/releases（Viewer+ 按空间过滤）。
-func (u *knowledgeUpstream) listSkillReleases(ctx context.Context, bearer string) ([]upstreamRelease, error) {
-	data, err := u.invoke(ctx, http.MethodGet, "/api/v1/skills/releases", bearer, nil)
+// listSkillCatalogs GET /api/v1/skills/catalog（Viewer+ 按空间过滤；只读上传
+// 目录，不查 release/published 状态）。
+func (u *knowledgeUpstream) listSkillCatalogs(ctx context.Context, bearer string) ([]upstreamCatalog, error) {
+	data, err := u.invoke(ctx, http.MethodGet, "/api/v1/skills/catalog", bearer, nil)
 	if err != nil {
 		return nil, err
 	}
-	var releases []upstreamRelease
+	var catalogs []upstreamCatalog
 	if len(data) > 0 && string(data) != "null" {
-		if err := json.Unmarshal(data, &releases); err != nil {
-			return nil, fmt.Errorf("decode skill releases: %w", err)
+		if err := json.Unmarshal(data, &catalogs); err != nil {
+			return nil, fmt.Errorf("decode skill catalog list: %w", err)
 		}
 	}
-	return releases, nil
+	return catalogs, nil
 }
 
-// getSkillRelease GET /api/v1/skills/releases/:id（Viewer+ 且目标空间成员）。
-func (u *knowledgeUpstream) getSkillRelease(ctx context.Context, bearer, id string) (*upstreamRelease, error) {
-	data, err := u.invoke(ctx, http.MethodGet, "/api/v1/skills/releases/"+id, bearer, nil)
+// getSkillCatalog GET /api/v1/skills/catalog/:id（Viewer+ 且当前空间成员）。
+func (u *knowledgeUpstream) getSkillCatalog(ctx context.Context, bearer, id string) (*upstreamCatalog, error) {
+	data, err := u.invoke(ctx, http.MethodGet, "/api/v1/skills/catalog/"+id, bearer, nil)
 	if err != nil {
 		return nil, err
 	}
-	var release upstreamRelease
-	if err := json.Unmarshal(data, &release); err != nil {
-		return nil, fmt.Errorf("decode skill release: %w", err)
+	var catalog upstreamCatalog
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		return nil, fmt.Errorf("decode skill catalog: %w", err)
 	}
-	return &release, nil
+	return &catalog, nil
 }
 
-// getSkillReleaseArchive GET /api/v1/skills/releases/:id/archive（流式归档字节，
-// 响应带 X-SHA256；403 SKILL_DELISTED / 422 SKILL_HASH_MISMATCH 以 *upstreamError 上抛）。
-func (u *knowledgeUpstream) getSkillReleaseArchive(ctx context.Context, bearer, id string) (io.ReadCloser, http.Header, error) {
-	body, header, _, err := u.invokeRaw(ctx, http.MethodGet, "/api/v1/skills/releases/"+id+"/archive", bearer)
-	if err != nil {
-		return nil, nil, err
+// getCatalogArchive GET /api/v1/skills/catalog/:id/archive?expected_sha256=...
+// （INT-103；下载独立预算：总 archiveDownloadTotalBudget、连接/无进度
+// archiveDownloadIdleTimeout）。返回流式响应体（需 Close）与响应头；
+// 上游业务错误以 *upstreamError 上抛，绝不返回假 ZIP。
+func (u *knowledgeUpstream) getCatalogArchive(ctx context.Context, bearer, id, expectedSHA256 string) (io.ReadCloser, http.Header, error) {
+	if u.baseURL == "" {
+		return nil, nil, errUpstreamUnavailable
 	}
-	return body, header, nil
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		u.baseURL+"/api/v1/skills/catalog/"+id+"/archive?expected_sha256="+expectedSHA256, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build upstream request: %w", err)
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := u.downloadClient.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", errUpstreamUnavailable, err)
+	}
+	if resp.StatusCode >= 400 {
+		defer func() { _ = resp.Body.Close() }()
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		var envelope upstreamResponse
+		if json.Valid(raw) {
+			_ = json.Unmarshal(raw, &envelope)
+		}
+		code, message := "UPSTREAM_ERROR", strings.TrimSpace(string(raw))
+		if envelope.Error != nil {
+			if envelope.Error.Code != "" {
+				code = envelope.Error.Code
+			}
+			if envelope.Error.Message != "" {
+				message = envelope.Error.Message
+			}
+		}
+		return nil, nil, &upstreamError{Status: resp.StatusCode, Code: code, Message: message}
+	}
+	// 无进度等待 ≤15s：body 包 idleReader，超时时关闭连接使读取失败。
+	body := newIdleReader(resp.Body, archiveDownloadIdleTimeout)
+	return body, resp.Header, nil
+}
+
+// idleReader 包装上游响应体：每次读到字节重置 idle 计时；超时关闭底层连接
+// 使 Read 返回错误（BND-105：下载连接/无进度等待不超过 15s）。
+type idleReader struct {
+	src   io.ReadCloser
+	idle  time.Duration
+	timer *time.Timer
+	ch    chan struct{}
+	done  chan struct{}
+	once  sync.Once
+}
+
+func newIdleReader(src io.ReadCloser, idle time.Duration) *idleReader {
+	r := &idleReader{
+		src:   src,
+		idle:  idle,
+		timer: time.NewTimer(idle),
+		ch:    make(chan struct{}, 1),
+		done:  make(chan struct{}),
+	}
+	go r.watch()
+	return r
+}
+
+func (r *idleReader) watch() {
+	for {
+		select {
+		case <-r.timer.C:
+			_ = r.src.Close()
+			return
+		case <-r.ch:
+			if !r.timer.Stop() {
+				select {
+				case <-r.timer.C:
+				default:
+				}
+			}
+			r.timer.Reset(r.idle)
+		case <-r.done:
+			if !r.timer.Stop() {
+				select {
+				case <-r.timer.C:
+				default:
+				}
+			}
+			return
+		}
+	}
+}
+
+func (r *idleReader) Read(p []byte) (int, error) {
+	n, err := r.src.Read(p)
+	if n > 0 {
+		select {
+		case r.ch <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
+func (r *idleReader) Close() error {
+	r.once.Do(func() { close(r.done) })
+	return r.src.Close()
 }

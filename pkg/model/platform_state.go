@@ -200,21 +200,3 @@ type SyncStep struct {
 func (SyncStep) TableName() string {
 	return "sync_steps"
 }
-
-// SkillPublishJob 技能跨空间发布任务记账（DATA-120b，migrations/000011_skill_publish_jobs）。
-// platform 只协调与记账，内容与分发权限裁定在 knowledge。
-type SkillPublishJob struct {
-	JobID          string    `gorm:"column:job_id;type:uuid;primaryKey" json:"job_id"`
-	ReleaseID      string    `gorm:"column:release_id;type:text;not null" json:"release_id"`
-	SourceTenant   string    `gorm:"column:source_tenant;type:text;not null" json:"source_tenant"`
-	Targets        string    `gorm:"column:targets;type:jsonb;not null" json:"targets"`
-	IdempotencyKey string    `gorm:"column:idempotency_key;type:text;not null;uniqueIndex" json:"idempotency_key"`
-	Status         string    `gorm:"column:status;type:text;not null" json:"status"`
-	Steps          *string   `gorm:"column:steps;type:jsonb" json:"steps,omitempty"`
-	CreatedAt      time.Time `gorm:"column:created_at;not null" json:"created_at"`
-	UpdatedAt      time.Time `gorm:"column:updated_at;not null" json:"updated_at"`
-}
-
-func (SkillPublishJob) TableName() string {
-	return "skill_publish_jobs"
-}

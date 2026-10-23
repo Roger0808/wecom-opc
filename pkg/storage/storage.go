@@ -148,6 +148,26 @@ func (s *Storage) SaveDeptTenantMapping(ctx context.Context, mapping *model.WeCo
 	return s.db.WithContext(ctx).Create(mapping).Error
 }
 
+// ListWeKnoraTenantNames 批量读取 WeKnora 空间显示名（WORK-RESOURCES-001
+// DATA-101：列表 tenant_name 字段；best-effort，缺失/失败由调用方回退 ID）。
+func (s *Storage) ListWeKnoraTenantNames(ctx context.Context, ids []uint64) (map[uint64]string, error) {
+	out := make(map[uint64]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []model.WeKnoraTenant
+	if err := s.db.WithContext(ctx).
+		Select("id", "name").
+		Where("id IN ?", ids).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.ID] = row.Name
+	}
+	return out, nil
+}
+
 // CreateTenantIfNotExists 创建空间
 func (s *Storage) CreateTenantIfNotExists(ctx context.Context, tenant *model.WeKnoraTenant) error {
 	var existing model.WeKnoraTenant

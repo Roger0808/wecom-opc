@@ -31,7 +31,7 @@ func setupMCPTaskEnv(t *testing.T) (*gin.Engine, *storage.Storage, *fakeMCP) {
 	if err := mainDB.AutoMigrate(&model.WeKnoraUser{}, &model.WeKnoraTenantMember{}, &model.WeKnoraAuthToken{}); err != nil {
 		t.Fatalf("migrate main: %v", err)
 	}
-	if err := stateDB.AutoMigrate(&model.IdentityLink{}, &model.ManagedEntitlement{}, &model.Session{}, &model.AuditEvent{}, &model.SkillPublishJob{}); err != nil {
+	if err := stateDB.AutoMigrate(&model.IdentityLink{}, &model.ManagedEntitlement{}, &model.Session{}, &model.AuditEvent{}); err != nil {
 		t.Fatalf("migrate state: %v", err)
 	}
 	s := storage.NewStorageWithDBs(mainDB, stateDB)

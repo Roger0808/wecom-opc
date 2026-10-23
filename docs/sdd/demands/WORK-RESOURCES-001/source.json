@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "protocol": "sdd-solo@1",
+  "demandId": "WORK-RESOURCES-001",
+  "deliveryMode": "full",
+  "repository": {
+    "repositoryId": "platform-opc",
+    "remote": "https://github.com/Roger0808/wecom-opc.git"
+  },
+  "authority": {
+    "remote": "https://github.com/Roger0808/work-opc.git",
+    "commit": "ba1211aa77b16ce25770b16a532d67d0f5985358",
+    "requirementsSha256": "sha256:bfb4eb8234de5584bb338293736dd8100f4acb65cebb987ba3515a86fbc4e484"
+  },
+  "files": {
+    "requirements.md": "sha256:bfb4eb8234de5584bb338293736dd8100f4acb65cebb987ba3515a86fbc4e484",
+    "contracts.md": "sha256:c7312fef58de14e93975e90ae92b1b008764a1f7ff032568683735bbbad4029d",
+    "dependencies.md": "sha256:6229b9fb9de98d33c320f688706a0e1b7bff52f99cb22e3606c41b52314c5ea8",
+    "repository/tasks.md": "sha256:429163527c8cc0d6ac7d72ff5a0b3532a2d4668354be5d9b8775a38a76eddaf9",
+    "repository/implementation.md": "sha256:93211d5bae6e6b6410575e0803b6647b38ee0095b40404d613f980280f92b374",
+    "repository/verification.md": "sha256:b9c1658954c1bd943b7a67292a479841c027c8c2364243a5bc289f00c56919dc",
+    "repository/review.md": "sha256:7be1614d64e43990722209f894796d213c92976da98fa311bd2adee08b761fef",
+    "repository/repository-receipt.json": "sha256:261c829f48d4ecc3507664e1d8e9306501169ca82c9a95010c40afefdcf3f996"
+  }
+}
