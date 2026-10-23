@@ -1,5 +1,3 @@
-本文件为 WORK-RESOURCES-001 只读快照，不得在参与仓独立修改；权威版本见主仓
-
 ---
 project: work-opc
 document: requirements
