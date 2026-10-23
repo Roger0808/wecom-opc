@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +34,6 @@ const (
 	errCodeSubjectNotProv      = "SUBJECT_NOT_PROVISIONED"
 	errCodeUpstreamUnavailable = "UPSTREAM_UNAVAILABLE"
 	errCodeSkillHashMismatch   = "SKILL_HASH_MISMATCH"
-	errCodeSkillDelisted       = "SKILL_DELISTED"
 )
 
 // bridgeTokenTTL 单次知识操作的上游 token 寿命（P09：≤120s）。
@@ -57,7 +57,7 @@ func NewKnowledgeHandler(cfg *config.Config, s *storage.Storage, bridge *kbridge
 	}
 }
 
-// ---------- 会话与桥助手（SkillsHandler 共用） ----------
+// ---------- 会话与桥助手（KnowledgeHandler 与 ResourcesHandler 共用） ----------
 
 // accessSession 已校验的平台会话身份。
 type accessSession struct {
@@ -155,7 +155,8 @@ func issueBridgeToken(c *gin.Context, bridge *kbridge.Bridge, link *model.Identi
 }
 
 // denyUpstream 把上游错误映射为平台错误信封：
-// 传输层 → 502 UPSTREAM_UNAVAILABLE；已知业务 code 透传；403 → SPACE_FORBIDDEN。
+// 传输层 → 502 UPSTREAM_UNAVAILABLE；已知业务 code 透传；403 → SPACE_FORBIDDEN；
+// 其余 404 → 404（DATA-105：资源不可见与不存在对外统一 404 语义由调用方决定）。
 func denyUpstream(c *gin.Context, err error) {
 	var uerr *upstreamError
 	switch {
@@ -163,7 +164,9 @@ func denyUpstream(c *gin.Context, err error) {
 		writeErrorEnvelope(c, http.StatusBadGateway, errCodeUpstreamUnavailable, "knowledge upstream unavailable")
 	case errors.As(err, &uerr):
 		switch uerr.Code {
-		case errCodeSpaceForbidden, errCodeSkillDelisted, errCodeSkillHashMismatch:
+		case errCodeSpaceForbidden, errCodeSkillHashMismatch,
+			errCodeSkillVersionChanged, errCodeArchiveNotReady,
+			errCodeResourceNotAccessible:
 			writeErrorEnvelope(c, uerr.Status, uerr.Code, uerr.Message)
 		default:
 			if uerr.Status == http.StatusForbidden {
@@ -355,8 +358,16 @@ func (h *KnowledgeHandler) Search(c *gin.Context) {
 
 // ---------- INT-120b GET /integration/v1/knowledge/:id ----------
 
-// GetKnowledge 片段/内容读取（Viewer 预览级）。?tenant= 显式指定空间时必须
-// 已授权；缺省按 active entitlement 租户升序逐个尝试，首个可见租户命中返回。
+// GetKnowledge 片段/内容读取（Viewer 预览级）。
+//
+// 缺省模式（无 scope）：?tenant= 显式指定空间时必须已授权；未指定按 active
+// entitlement 租户升序逐个尝试，首个可见租户命中返回（保持既有行为）。
+//
+// 显式 scope 模式（WORK-RESOURCES-001 / INT-104 / BND-005）：tenant 与
+// knowledge_base_id 查询参数成对出现时启用——只用指定 tenant/KB，绝不遍历
+// 其他授权空间补结果；取回的权威文档先校验实际归属（tenant + KB）一致才
+// 输出正文，scope 错配返回 403 SCOPE_MISMATCH 且不泄露正文/片段；目标不可见
+// 统一 404 RESOURCE_NOT_ACCESSIBLE；显式无权空间 403 SPACE_FORBIDDEN。
 func (h *KnowledgeHandler) GetKnowledge(c *gin.Context) {
 	ctx := c.Request.Context()
 	sess, ok := resolveAccessSession(h.cfg, h.storage, c)
@@ -370,6 +381,75 @@ func (h *KnowledgeHandler) GetKnowledge(c *gin.Context) {
 		writeErrorEnvelope(c, http.StatusInternalServerError, errCodeInternal, "list entitlements failed")
 		return
 	}
+
+	scopeTenant := strings.TrimSpace(c.Query("tenant"))
+	scopeKB := strings.TrimSpace(c.Query("knowledge_base_id"))
+	if scopeKB != "" && scopeTenant == "" {
+		writeErrorEnvelope(c, http.StatusBadRequest, errCodeInvalidRequest, "tenant is required when knowledge_base_id is provided")
+		return
+	}
+	if scopeKB != "" && !validResourceID(scopeKB) {
+		writeErrorEnvelope(c, http.StatusBadRequest, errCodeInvalidRequest, "knowledge_base_id is invalid")
+		return
+	}
+	if scopeKB != "" {
+		// 显式 scope 模式（tenant 与 knowledge_base_id 成对出现，tenant 已在
+		// 上方校验）：只用指定 tenant/KB（BND-005：禁止遍历其他授权空间找同 ID）。
+		scopeTenant := strings.TrimSpace(c.Query("tenant"))
+		allowed := false
+		for _, t := range tenants {
+			if t == scopeTenant {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			writeErrorEnvelope(c, http.StatusForbidden, errCodeSpaceForbidden, "tenant not in active entitlement set")
+			return
+		}
+		token, err := h.bridge.IssueUpstreamToken(ctx, sess.link.ID, scopeTenant, bridgeTokenTTL)
+		if err != nil {
+			writeErrorEnvelope(c, http.StatusForbidden, bridgeFailureCode(err), "upstream token issue failed")
+			return
+		}
+		data, err := h.upstream.getKnowledge(ctx, token, knowledgeID)
+		if err != nil {
+			var uerr *upstreamError
+			if errors.As(err, &uerr) && (uerr.Status == http.StatusForbidden || uerr.Status == http.StatusNotFound) {
+				// 目录/文档不可见统一 404，绝不落到其他空间补结果。
+				writeErrorEnvelope(c, http.StatusNotFound, errCodeResourceNotAccessible, "knowledge is not accessible in the scoped tenant")
+				return
+			}
+			denyUpstream(c, err)
+			return
+		}
+		// 权威结果归属校验：实际 tenant/KB 必须与 scope 一致才输出正文
+		//（VAL-207：元数据与正文在同一次授权读取结果中校验，移动文档后不越界）。
+		if !knowledgeMatchesScope(data, scopeTenant, scopeKB) {
+			auditEvent(ctx, h.storage, sess.link.ImmutableSubject, "integration.knowledge.scope_denied", "GET "+c.FullPath(), integrationRequestID(c), map[string]interface{}{
+				"result":       "denied",
+				"knowledge_id": knowledgeID,
+				"scope_tenant": scopeTenant,
+				"scope_kb":     scopeKB,
+				"error":        errCodeScopeMismatch,
+			})
+			writeErrorEnvelope(c, http.StatusForbidden, errCodeScopeMismatch, "knowledge does not belong to the scoped tenant or knowledge base")
+			return
+		}
+		auditEvent(ctx, h.storage, sess.link.ImmutableSubject, "integration.knowledge.viewed", "GET "+c.FullPath(), integrationRequestID(c), map[string]interface{}{
+			"result":        "allowed",
+			"knowledge_id":  knowledgeID,
+			"source_tenant": scopeTenant,
+			"scope_kb":      scopeKB,
+		})
+		c.JSON(http.StatusOK, gin.H{
+			"knowledge_id":  knowledgeID,
+			"source_tenant": scopeTenant,
+			"data":          data,
+		})
+		return
+	}
+
 	if explicit := c.Query("tenant"); explicit != "" {
 		allowed := false
 		for _, t := range tenants {
@@ -420,6 +500,30 @@ func (h *KnowledgeHandler) GetKnowledge(c *gin.Context) {
 		"source_tenant": hitTenant,
 		"data":          data,
 	})
+}
+
+// knowledgeMatchesScope 校验权威知识文档的实际归属与 scope 一致（BND-005 /
+// INT-104）。文档的 tenant_id/knowledge_base_id 任一与 scope 不符即 false；
+// 字段缺失/不可解析按错配处理（fail-closed，不凭请求参数补造归属）。
+func knowledgeMatchesScope(data json.RawMessage, scopeTenant, scopeKB string) bool {
+	var doc struct {
+		TenantID        *uint64 `json:"tenant_id"`
+		KnowledgeBaseID *string `json:"knowledge_base_id"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return false
+	}
+	if doc.KnowledgeBaseID == nil || *doc.KnowledgeBaseID != scopeKB {
+		return false
+	}
+	if doc.TenantID == nil {
+		return false
+	}
+	numeric, err := strconv.ParseUint(scopeTenant, 10, 64)
+	if err != nil {
+		return false
+	}
+	return *doc.TenantID == numeric
 }
 
 // ---------- INT-120c GET /integration/v1/knowledge/:id/file ----------

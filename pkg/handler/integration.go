@@ -433,10 +433,13 @@ func (h *IntegrationHandler) issueWorkTokens(c *gin.Context, ctx context.Context
 		return
 	}
 
-	// work 桌面上下文键 = issuer|subject|tenant|generation（DATA-120c），
-	// 受管技能目录按 opc/<tenant>/<publish_id> 命名；租户从该主体 active
-	// entitlement 集推导（与 INT-142 技能/知识桥同一来源），单租户直出、
-	// 多租户取排序首个（确定性），无授权租户时为空串由客户端按无技能处理。
+	// work 桌面上下文键 = issuer|subject|tenant|generation（DATA-120c）；
+	// 租户从该主体 active entitlement 集推导（与知识桥/资源列表同一授权
+	// 来源），单租户直出、多租户取排序首个（确定性），无授权租户时为空串
+	// 由客户端按无企业资源处理。本地安装目录命名由 work 侧受管 installer
+	// 按 catalog 新链路自管（enterprise-skills/catalog/<身份哈希>/<tenant>/
+	// <catalog_id>/<sha>/），平台只下发当前授权空间，不再约定 publish_id
+	// 目录形态（旧发布链路已随 WORK-RESOURCES-001/BND-010 删除）。
 	// subject/spaces/authz_version 同包进响应：work 客户端据其渲染企业
 	// 区并初始化上下文（fake 平台一贯带这些字段，真平台此前漏发）。
 	link, err := h.storage.GetIdentityLink(ctx, *txn.IdentityLinkID)
