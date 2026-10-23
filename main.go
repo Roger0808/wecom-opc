@@ -225,18 +225,16 @@ func main() {
 		v1.GET("/mcp/services", mcpHandler.ListServices)
 	}
 
-	// 技能协调接口组（TASK-P10 / INT-141/142）：发布任务记账与客户端获取。
-	// 管理端点挂 RequireAdminAuth（system_admin 或源空间 dept_admin）；
-	// 客户端列表/下载按租户 entitlement 逐空间查 knowledge release。
-	// internal/skills（INT-160）供 code 后端服务 token 查询技能清单。
-	skillsHandler := handler.NewSkillsHandler(cfg, storageInstance, bridge)
-	internal.GET("/skills", skillsHandler.InternalList)
+	// 企业资源接口组（WORK-RESOURCES-001 / INT-101/103）：知识库与技能目录的
+	// 只读列表、单项目录授权与原始归档下载代理。按当前 entitlement 逐空间用
+	// 个人桥 token 查 knowledge，不查 release/发布状态（旧发布协调已随
+	// BND-010 删除，旧路径返回 404）。
+	resourcesHandler := handler.NewResourcesHandler(cfg, storageInstance, bridge)
 	{
-		v1.GET("/skills", skillsHandler.List)
-		v1.GET("/skills/:publish_id/download", skillsHandler.Download)
-		adminSkills := v1.Group("/admin", adminauth.RequireAdminAuth(adminAuthCfg))
-		adminSkills.POST("/skills/publish-jobs", skillsHandler.CreatePublishJob)
-		adminSkills.GET("/skills/publish-jobs/:id", skillsHandler.GetPublishJob)
+		v1.GET("/resources/knowledge-bases", resourcesHandler.ListKnowledgeBases)
+		v1.GET("/resources/skills", resourcesHandler.ListSkillCatalogs)
+		v1.GET("/resources/skills/:catalog_id", resourcesHandler.GetSkillCatalog)
+		v1.GET("/resources/skills/:catalog_id/archive", resourcesHandler.DownloadSkillCatalogArchive)
 	}
 
 	port := cfg.Server.Port
