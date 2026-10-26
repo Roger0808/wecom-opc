@@ -95,6 +95,14 @@ func (s *Storage) UpdateAppStatus(ctx context.Context, slug string, status strin
 	return s.db.WithContext(ctx).Model(&model.DeployedApp{}).Where("slug = ?", slug).Updates(updates).Error
 }
 
+// UpdateAppLog 实时更新应用的构建日志
+func (s *Storage) UpdateAppLog(ctx context.Context, slug string, buildLog string) error {
+	return s.db.WithContext(ctx).Model(&model.DeployedApp{}).Where("slug = ?", slug).Updates(map[string]interface{}{
+		"build_log":  buildLog,
+		"updated_at": time.Now(),
+	}).Error
+}
+
 // UpdateAppConfig 修改应用配置与绑定的线上资源，并更新时间戳
 func (s *Storage) UpdateAppConfig(ctx context.Context, slug string, port int, appConfigJSON string, resourceIDsJSON string) error {
 	return s.db.WithContext(ctx).Model(&model.DeployedApp{}).Where("slug = ?", slug).Updates(map[string]interface{}{

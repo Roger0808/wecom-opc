@@ -38,6 +38,7 @@ type OnlineResourceConfig struct {
 }
 
 type AppDeployConfig struct {
+	AutoSyncSkill       bool                   `yaml:"auto_sync_skill"`       // Explicit opt-in; deployment alone does not publish to the shared skill pool.
 	IntranetRootDomain  string                 `yaml:"intranet_root_domain"`  // e.g. "apps.opc.intra"
 	CaproverURL         string                 `yaml:"caprover_url"`          // e.g. "http://deploy.opc.intra:3000"
 	CaproverPassword    string                 `yaml:"caprover_password"`     // CapRover admin password

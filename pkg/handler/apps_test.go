@@ -198,7 +198,7 @@ func TestHandler_PublishAndList(t *testing.T) {
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, putReq)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 on config update, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected deployment service unavailable without a controller, got %d: %s", w.Code, w.Body.String())
 	}
 }

@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -144,13 +146,14 @@ func (c *CapRoverClient) UpdateAppConfigAndEnv(ctx context.Context, slug string,
 	}
 
 	payload, _ := json.Marshal(map[string]interface{}{
-		"appName":           slug,
-		"instanceCount":     1,
-		"containerHttpPort": port,
-		"notExposeAsWebApp": false,
-		"forceSsl":          false,
-		"websocketSupport":  true,
-		"envVars":           envs,
+		"appName":               slug,
+		"instanceCount":         1,
+		"containerHttpPort":     port,
+		"notExposeAsWebApp":     false,
+		"forceSsl":              false,
+		"websocketSupport":      true,
+		"serviceUpdateOverride": `{"EndpointSpec":{"Mode":"dnsrr"}}`,
+		"envVars":               envs,
 	})
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/v2/user/apps/appDefinitions/update", bytes.NewReader(payload))
@@ -214,14 +217,81 @@ func (c *CapRoverClient) UploadAppTar(ctx context.Context, slug string, tarBytes
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return fmt.Errorf("decode upload response: %w", err)
 	}
-	if result.Status != 100 {
+	// CapRover returns 100 (STATUS_OK) or 101 (STATUS_OK_DEPLOY_STARTED) when detached=1
+	if result.Status != 100 && result.Status != 101 {
 		return fmt.Errorf("upload app tar failed (status %d): %s", result.Status, result.Description)
 	}
 	return nil
 }
 
+// invalidateToken 清空缓存的 CapRover token，用于 1106 过期重试
+func (c *CapRoverClient) invalidateToken() {
+	c.mu.Lock()
+	c.authToken = ""
+	c.mu.Unlock()
+}
+
+// RuntimeLogs returns bounded application output for a failed deployment diagnosis.
+func (c *CapRoverClient) RuntimeLogs(ctx context.Context, slug string) (string, error) {
+	token, err := c.getToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/v2/user/apps/appData/"+url.PathEscape(slug)+"/logs?encoding=utf8", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("x-captain-auth", token)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var result caproverResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&result); err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK || result.Status != 100 {
+		return "", fmt.Errorf("runtime log request failed: %d", result.Status)
+	}
+	var data struct {
+		Logs string `json:"logs"`
+	}
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		return "", err
+	}
+	if len(data.Logs) > 32768 {
+		data.Logs = data.Logs[len(data.Logs)-32768:]
+	}
+	return data.Logs, nil
+}
+
+// isValidHealthzResponse 校验 /healthz 响应体不是 CapRover 默认占位页或未配置的 HTML 页
+func isValidHealthzResponse(body []byte) bool {
+	s := strings.ToLower(strings.TrimSpace(string(body)))
+	if strings.Contains(s, "powered by caprover") ||
+		strings.Contains(s, "captain-root-domain") ||
+		strings.Contains(s, "ng-version") ||
+		strings.HasPrefix(s, "<!doctype html") ||
+		strings.HasPrefix(s, "<html") {
+		return false
+	}
+	return true
+}
+
 // WaitBuildAndHealthz 轮询构建状态并探测内网健康检查 /healthz
 func (c *CapRoverClient) WaitBuildAndHealthz(ctx context.Context, slug, appURL string) (string, error) {
+	return c.WaitBuildAndHealthzWithCallback(ctx, slug, appURL, nil)
+}
+
+// WaitBuildAndHealthzWithCallback 轮询构建状态并支持实时日志回调
+func (c *CapRoverClient) WaitBuildAndHealthzWithCallback(ctx context.Context, slug, appURL string, onLog func(string)) (string, error) {
+	return c.WaitBuildConfigureAndHealthz(ctx, slug, appURL, nil, onLog)
+}
+
+// WaitBuildConfigureAndHealthz applies approved configuration after the first image exists,
+// before probing a service which may require these values just to start.
+func (c *CapRoverClient) WaitBuildConfigureAndHealthz(ctx context.Context, slug, appURL string, configure func() error, onLog func(string)) (string, error) {
 	token, err := c.getToken(ctx)
 	if err != nil {
 		return "", err
@@ -265,6 +335,17 @@ func (c *CapRoverClient) WaitBuildAndHealthz(ctx context.Context, slug, appURL s
 			}
 			resp.Body.Close()
 
+			if result.Status != 100 {
+				// 1106/1105 表示 token 失效，重新登录后继续轮询
+				if result.Status == 1106 || result.Status == 1105 {
+					c.invalidateToken()
+					if newToken, loginErr := c.getToken(ctx); loginErr == nil {
+						token = newToken
+					}
+				}
+				continue
+			}
+
 			var data struct {
 				IsAppBuilding bool `json:"isAppBuilding"`
 				IsBuildFailed bool `json:"isBuildFailed"`
@@ -275,6 +356,9 @@ func (c *CapRoverClient) WaitBuildAndHealthz(ctx context.Context, slug, appURL s
 			_ = json.Unmarshal(result.Data, &data)
 			if len(data.Logs.Lines) > 0 {
 				lastLogs = strings.Join(data.Logs.Lines, "\n")
+				if onLog != nil {
+					onLog(lastLogs)
+				}
 			}
 
 			if !data.IsAppBuilding {
@@ -286,8 +370,25 @@ func (c *CapRoverClient) WaitBuildAndHealthz(ctx context.Context, slug, appURL s
 		}
 	}
 
+	if configure != nil {
+		if err := configure(); err != nil {
+			return lastLogs, fmt.Errorf("apply approved configuration after build: %w", err)
+		}
+	}
+
 	// 2. 探测 /healthz 返回 200 OK (最长探测 90 秒，每次间隔 probeInterval)
 	healthURL := strings.TrimRight(appURL, "/") + "/healthz"
+	var fallbackURL, fallbackHost string
+	if parsedApp, err := url.Parse(healthURL); err == nil && parsedApp.Host != "" {
+		fallbackHost = parsedApp.Host
+		if parsedCap, err := url.Parse(c.baseURL); err == nil && parsedCap.Hostname() != "" {
+			capHost := parsedCap.Hostname()
+			if capHost != "127.0.0.1" && capHost != "localhost" {
+				fallbackURL = fmt.Sprintf("http://%s:80%s", capHost, parsedApp.RequestURI())
+			}
+		}
+	}
+
 	probeClient := &http.Client{Timeout: 5 * time.Second}
 	probeTimeout := time.After(90 * time.Second)
 	probeInterval := c.ProbeInterval
@@ -297,24 +398,33 @@ func (c *CapRoverClient) WaitBuildAndHealthz(ctx context.Context, slug, appURL s
 	probeTicker := time.NewTicker(probeInterval)
 	defer probeTicker.Stop()
 
+	tryProbe := func(targetURL, hostHeader string) bool {
+		req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+		if err != nil {
+			return false
+		}
+		if hostHeader != "" {
+			req.Host = hostHeader
+		}
+		resp, err := probeClient.Do(req)
+		if err != nil {
+			return false
+		}
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK && isValidHealthzResponse(bodyBytes)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return lastLogs, ctx.Err()
 		case <-probeTimeout:
-			return lastLogs, fmt.Errorf("health check timeout: %s did not return HTTP 200 within 90s", healthURL)
+			return lastLogs, fmt.Errorf("health check timeout: %s did not return valid HTTP 200 within 90s", healthURL)
 		case <-probeTicker.C:
-			req, err := http.NewRequestWithContext(ctx, "GET", healthURL, nil)
-			if err != nil {
-				continue
-			}
-			resp, err := probeClient.Do(req)
-			if err == nil {
-				_ = resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					lastLogs += fmt.Sprintf("\n[HealthCheck] Healthz probe succeeded: %s returned 200 OK", healthURL)
-					return lastLogs, nil
-				}
+			if tryProbe(healthURL, "") || (fallbackURL != "" && tryProbe(fallbackURL, fallbackHost)) {
+				lastLogs += fmt.Sprintf("\n[HealthCheck] Healthz probe succeeded: %s returned 200 OK", healthURL)
+				return lastLogs, nil
 			}
 		}
 	}

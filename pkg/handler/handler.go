@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -67,6 +68,19 @@ func NewHandler(cfg *config.Config, wecomClient wecomUserAPI, acClient *accountc
 	var knowSyncer *deploy.KnowledgeSyncer
 	if cfg.AppDeploy.KnowledgeBaseURL != "" {
 		knowSyncer = deploy.NewKnowledgeSyncer(cfg.AppDeploy.KnowledgeBaseURL, cfg.AppDeploy.KnowledgeAdminToken)
+		if authSvc != nil && storage != nil {
+			knowSyncer.WithTokenProvider(func(ctx context.Context) (string, error) {
+				adminUser, err := storage.GetFirstActiveAdminUser(ctx)
+				if err != nil || adminUser == nil {
+					return "", fmt.Errorf("find active admin user for knowledge sync: %w", err)
+				}
+				accessToken, _, err := authSvc.IssueWeKnoraTokens(ctx, adminUser, adminUser.TenantID)
+				if err != nil {
+					return "", fmt.Errorf("issue knowledge token for admin %s: %w", adminUser.Email, err)
+				}
+				return accessToken, nil
+			})
+		}
 	}
 
 	return &Handler{
