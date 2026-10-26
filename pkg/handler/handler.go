@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -11,11 +12,13 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"weknora-tokendance/config"
 	"weknora-tokendance/pkg/accountcenter"
 	"weknora-tokendance/pkg/auth"
+	"weknora-tokendance/pkg/deploy"
 	"weknora-tokendance/pkg/model"
 	"weknora-tokendance/pkg/storage"
 	"weknora-tokendance/pkg/syncer"
@@ -34,26 +37,73 @@ type wecomUserAPI interface {
 }
 
 type Handler struct {
-	cfg     *config.Config
-	wecom   wecomUserAPI
-	ac      *accountcenter.Client
-	syncer  *syncer.Syncer
-	auth    *auth.AuthService
-	storage *storage.Storage
+	cfg             *config.Config
+	wecom           wecomUserAPI
+	ac              *accountcenter.Client
+	syncer          *syncer.Syncer
+	auth            *auth.AuthService
+	storage         *storage.Storage
+	caproverClient  *deploy.CapRoverClient
+	knowledgeSyncer *deploy.KnowledgeSyncer
+
+	// 临时授权码缓存 (用于 OIDC /token 兑换)
+	authCodesLock sync.RWMutex
+	authCodes     map[string]*OIDCAuthSession
 
 	// 手动同步服务（TASK-P08）：/admin/api/sync/all 触发全量同步的唯一入口（走账本/锁/快照契约）
 	syncService *syncservice.Service
 }
 
+type OIDCAuthSession struct {
+	User      *model.WeKnoraUser
+	ExpiresAt time.Time
+}
+
 func NewHandler(cfg *config.Config, wecomClient wecomUserAPI, acClient *accountcenter.Client, syncer *syncer.Syncer, authSvc *auth.AuthService, storage *storage.Storage) *Handler {
-	return &Handler{
-		cfg:     cfg,
-		wecom:   wecomClient,
-		ac:      acClient,
-		syncer:  syncer,
-		auth:    authSvc,
-		storage: storage,
+	var capClient *deploy.CapRoverClient
+	if cfg.AppDeploy.CaproverURL != "" {
+		capClient = deploy.NewCapRoverClient(cfg.AppDeploy.CaproverURL, cfg.AppDeploy.CaproverPassword, cfg.AppDeploy.IntranetRootDomain)
 	}
+
+	var knowSyncer *deploy.KnowledgeSyncer
+	if cfg.AppDeploy.KnowledgeBaseURL != "" {
+		knowSyncer = deploy.NewKnowledgeSyncer(cfg.AppDeploy.KnowledgeBaseURL, cfg.AppDeploy.KnowledgeAdminToken)
+		if authSvc != nil && storage != nil {
+			knowSyncer.WithTokenProvider(func(ctx context.Context) (string, error) {
+				adminUser, err := storage.GetFirstActiveAdminUser(ctx)
+				if err != nil || adminUser == nil {
+					return "", fmt.Errorf("find active admin user for knowledge sync: %w", err)
+				}
+				accessToken, _, err := authSvc.IssueWeKnoraTokens(ctx, adminUser, adminUser.TenantID)
+				if err != nil {
+					return "", fmt.Errorf("issue knowledge token for admin %s: %w", adminUser.Email, err)
+				}
+				return accessToken, nil
+			})
+		}
+	}
+
+	return &Handler{
+		cfg:             cfg,
+		wecom:           wecomClient,
+		ac:              acClient,
+		syncer:          syncer,
+		auth:            authSvc,
+		storage:         storage,
+		caproverClient:  capClient,
+		knowledgeSyncer: knowSyncer,
+		authCodes:       make(map[string]*OIDCAuthSession),
+	}
+}
+
+// SetCapRoverClient 用于单元测试注入模拟的 CapRoverClient
+func (h *Handler) SetCapRoverClient(client *deploy.CapRoverClient) {
+	h.caproverClient = client
+}
+
+// SetKnowledgeSyncer 用于单元测试注入模拟的 KnowledgeSyncer
+func (h *Handler) SetKnowledgeSyncer(syncer *deploy.KnowledgeSyncer) {
+	h.knowledgeSyncer = syncer
 }
 
 // SetSyncService 注入手动同步服务（/admin/api/sync/all 触发全量同步走账本/锁/快照契约）。

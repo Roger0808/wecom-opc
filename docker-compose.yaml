@@ -11,11 +11,11 @@ services:
       - TZ=Asia/Shanghai
     volumes:
       - ./tokendance-gateway:/app/tokendance-gateway:ro
-      - ./config.yaml:/app/config.yaml:ro
+      - ./config.docker.yaml:/app/config.yaml:ro
     networks:
       - weknora-network
 
 networks:
   weknora-network:
     external: true
-    name: root_default
+    name: opc-20_WeKnora-network

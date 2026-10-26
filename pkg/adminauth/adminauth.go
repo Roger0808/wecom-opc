@@ -142,8 +142,13 @@ func requireAdmin(cfg MiddlewareConfig, tenantScopeCheck bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 
-		// 1. 认证：Bearer token 校验（签名 + 过期 + 角色声明）
+		// 1. 认证：Bearer token 校验（签名 + 过期 + 角色声明，支持 Cookie 回退）
 		raw := strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+		if raw == "" {
+			if cookie, err := c.Cookie("opc_admin_token"); err == nil && cookie != "" {
+				raw = cookie
+			}
+		}
 		var claims *Claims
 		var authErr error
 		if raw == "" {

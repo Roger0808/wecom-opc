@@ -32,9 +32,9 @@ func NewStorage(cfg config.DatabaseConfig) (*Storage, error) {
 		return nil, fmt.Errorf("connect postgres: %w", err)
 	}
 
-	// 自动创建 mapping 表
-	if err := db.AutoMigrate(&model.WeComDeptTenantMapping{}); err != nil {
-		return nil, fmt.Errorf("auto migrate mapping table: %w", err)
+	// 自动创建 mapping 表与 deployed_apps 表
+	if err := db.AutoMigrate(&model.WeComDeptTenantMapping{}, &model.DeployedApp{}); err != nil {
+		return nil, fmt.Errorf("auto migrate tables: %w", err)
 	}
 
 	return &Storage{db: db}, nil
@@ -83,6 +83,22 @@ func (s *Storage) GetUserByEmailOrUsername(ctx context.Context, email, username 
 	var user model.WeKnoraUser
 	err := s.db.WithContext(ctx).
 		Where("email = ? OR username = ?", email, username).
+		First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// GetFirstActiveAdminUser 查找首个可用管理员用户（用于系统向 knowledge-opc 签发技能同步 Token）
+func (s *Storage) GetFirstActiveAdminUser(ctx context.Context) (*model.WeKnoraUser, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("main db not configured")
+	}
+	var user model.WeKnoraUser
+	err := s.db.WithContext(ctx).
+		Where("is_active = ?", true).
+		Order("is_system_admin DESC, created_at ASC").
 		First(&user).Error
 	if err != nil {
 		return nil, err
