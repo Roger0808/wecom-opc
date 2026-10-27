@@ -153,6 +153,12 @@ type codeSpaceView struct {
 	Role     string `json:"role"`
 }
 
+// SpaceDetail 空间详情视图（ID 与显示名称，用于多空间切换展示）
+type SpaceDetail struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // ---------- POST /integration/v1/auth/authorize ----------
 
 // Authorize 校验客户端白名单与回环 redirect_uri，创建 pending 登录事务（10min），
@@ -502,6 +508,7 @@ func (h *IntegrationHandler) issueWorkTokens(c *gin.Context, ctx context.Context
 		"expires_in":    int(accessTokenTTL.Seconds()),
 		"subject":       link.ImmutableSubject,
 		"spaces":        tenants,
+		"spaces_detail": h.resolveSpacesDetail(ctx, tenants),
 		"authz_version": authzVersion,
 		"capabilities":  capabilities,
 		"email":         email,
@@ -611,7 +618,7 @@ func (h *IntegrationHandler) Refresh(c *gin.Context) {
 	presentedHash := sha256Hex(req.RefreshToken)
 	switch {
 	case presentedHash == session.RefreshVerifierHash:
-		h.rotateRefresh(c, ctx, session, sub)
+		h.rotateRefresh(c, ctx, session, link, ents, sub)
 	case session.PreviousVerifierHash != nil && presentedHash == *session.PreviousVerifierHash:
 		h.revokeFamilyForReuse(c, ctx, session)
 	default:
@@ -619,7 +626,7 @@ func (h *IntegrationHandler) Refresh(c *gin.Context) {
 	}
 }
 
-func (h *IntegrationHandler) rotateRefresh(c *gin.Context, ctx context.Context, session *model.Session, sub string) {
+func (h *IntegrationHandler) rotateRefresh(c *gin.Context, ctx context.Context, session *model.Session, link *model.IdentityLink, ents []model.ManagedEntitlement, sub string) {
 	now := time.Now()
 	accessJWT, err := h.signPlatformJWT(map[string]interface{}{
 		"sub":  session.IdentityLinkID,
@@ -661,10 +668,52 @@ func (h *IntegrationHandler) rotateRefresh(c *gin.Context, ctx context.Context, 
 		"subject":    sub,
 	}, c)
 
+	email, displayName := "", ""
+	if ku, uerr := kbridge.NewWeKnoraStore(h.storage).GetUserByID(ctx, link.KnowledgeUserID); uerr == nil && ku != nil {
+		email, displayName = ku.Email, ku.Username
+	}
+	tenantSet := make(map[string]struct{}, len(ents))
+	capSet := make(map[string]struct{}, len(ents))
+	authzVersion := session.AuthzVersion
+	for _, e := range ents {
+		if e.TenantID != "" {
+			tenantSet[e.TenantID] = struct{}{}
+		}
+		if e.Capability != "" {
+			capSet[e.Capability] = struct{}{}
+		}
+		if e.AuthzVersion > authzVersion {
+			authzVersion = e.AuthzVersion
+		}
+	}
+	tenants := make([]string, 0, len(tenantSet))
+	for t := range tenantSet {
+		tenants = append(tenants, t)
+	}
+	sort.Strings(tenants)
+	capabilities := make([]string, 0, len(capSet))
+	for cap := range capSet {
+		capabilities = append(capabilities, cap)
+	}
+	sort.Strings(capabilities)
+	tenant := ""
+	if len(tenants) > 0 {
+		tenant = tenants[0]
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  accessJWT,
 		"refresh_token": refreshJWT,
 		"expires_in":    int(accessTokenTTL.Seconds()),
+		"subject":       link.ImmutableSubject,
+		"spaces":        tenants,
+		"spaces_detail": h.resolveSpacesDetail(ctx, tenants),
+		"authz_version": authzVersion,
+		"capabilities":  capabilities,
+		"email":         email,
+		"name":          displayName,
+		"tenant":        tenant,
+		"tenants":       tenants,
 	})
 }
 
@@ -828,6 +877,7 @@ func (h *IntegrationHandler) Session(c *gin.Context) {
 		"identity_link_id": link.ID,
 		"subject":          link.ImmutableSubject,
 		"spaces":           spaces,
+		"spaces_detail":    h.resolveSpacesDetail(ctx, spaces),
 		"authz_version":    authzVersion,
 		"capabilities":     capabilities,
 	})
@@ -968,6 +1018,32 @@ func (h *IntegrationHandler) CodeExchange(c *gin.Context) {
 }
 
 // ---------- 助手 ----------
+
+// resolveSpacesDetail 将租户 ID 列表批量解析为带人类可读名称的空间详情（best-effort，失败回退为 ID）。
+func (h *IntegrationHandler) resolveSpacesDetail(ctx context.Context, tenantIDs []string) []SpaceDetail {
+	numericIDs := make([]uint64, 0, len(tenantIDs))
+	for _, t := range tenantIDs {
+		if n, err := strconv.ParseUint(t, 10, 64); err == nil {
+			numericIDs = append(numericIDs, n)
+		}
+	}
+	names, err := h.storage.ListWeKnoraTenantNames(ctx, numericIDs)
+	if err != nil {
+		log.Printf("[Integration] resolveSpacesDetail failed: %v", err)
+		names = make(map[uint64]string)
+	}
+	details := make([]SpaceDetail, 0, len(tenantIDs))
+	for _, t := range tenantIDs {
+		name := t
+		if n, err := strconv.ParseUint(t, 10, 64); err == nil {
+			if nm, ok := names[n]; ok && nm != "" {
+				name = nm
+			}
+		}
+		details = append(details, SpaceDetail{ID: t, Name: name})
+	}
+	return details
+}
 
 // bearerClaims 解析并校验 Authorization: Bearer 平台令牌（type 匹配）。
 func (h *IntegrationHandler) bearerClaims(c *gin.Context, typ string) (jwt.MapClaims, bool) {
