@@ -16,6 +16,71 @@ func TestConfirmedResourceValuesNotErasedByBlankInputs(t *testing.T) {
 	}
 }
 
+func TestFieldBindingsOnlyReplaceConfirmedFields(t *testing.T) {
+	resources := []config.OnlineResourceConfig{
+		{ID: "a", Name: "A", EnvVars: map[string]string{"DB_DSN": "db-a", "PASSWORD": "must-not-replace", "EXTRA": "must-not-inject"}},
+		{ID: "b", Name: "B", EnvVars: map[string]string{"DB_DSN": "db-b", "CACHE_URL": "cache-b"}},
+	}
+	items := []model.AppConfigItem{
+		{Key: "DB_DSN", ResourceID: "a", ValueSource: "resource", Required: true},
+		{Key: "PASSWORD", Value: "original", ValueSource: "original"},
+		{Key: "CACHE_URL", ResourceID: "b", ValueSource: "resource"},
+		{Key: "OPTIONAL", ValueSource: "manual"},
+	}
+	env, err := mergeAppEnvironment(resources, []string{"a", "b"}, items)
+	if err != nil || len(env) != 4 {
+		t.Fatalf("per-field bindings failed: %v", err)
+	}
+	values := map[string]string{}
+	for _, item := range env {
+		values[item.Key] = item.Value
+	}
+	if values["DB_DSN"] != "db-a" || values["PASSWORD"] != "original" || values["CACHE_URL"] != "cache-b" {
+		t.Fatal("confirmed values were changed")
+	}
+	if _, exists := values["EXTRA"]; exists {
+		t.Fatal("unconfirmed resource field injected")
+	}
+	view := describeAppConfig(resources, []string{"a", "b"}, items)
+	if !view[0].HasValue || view[0].SourceLabel != "A" || view[0].Value != "" || view[0].ResourceID != "a" {
+		t.Fatal("field binding lost or credential exposed")
+	}
+	if _, err := mergeAppEnvironment(resources, []string{"a", "b"}, view); err != nil {
+		t.Fatal(err)
+	}
+	items[0].ResourceID = "unknown"
+	if _, err := mergeAppEnvironment(resources, []string{"a"}, items); err == nil {
+		t.Fatal("unknown field resource accepted")
+	}
+}
+
+func TestExplicitBlankDoesNotInheritResourceCredential(t *testing.T) {
+	resources := []config.OnlineResourceConfig{{ID: "a", EnvVars: map[string]string{"PASSWORD": "not-selected"}}}
+	_, err := mergeAppEnvironment(resources, []string{"a"}, []model.AppConfigItem{{Key: "PASSWORD", ValueSource: "manual", Required: true}})
+	if err == nil {
+		t.Fatal("blank field inherited unconfirmed credential")
+	}
+}
+
+func TestResourceInjectedConfigurationHasValueWithoutExposingCredential(t *testing.T) {
+	resources := []config.OnlineResourceConfig{{ID: "mysql", Name: "Approved MySQL", EnvVars: map[string]string{"DB_DSN": "fixture-secret", "PASSWORD": "resource-secret"}}}
+	stored := []model.AppConfigItem{{Key: "DB_DSN", Value: ""}, {Key: "PASSWORD", Value: "own-original"}, {Key: "MISSING", Value: ""}}
+	view := describeAppConfig(resources, []string{"mysql"}, stored)
+	if !view[0].HasValue || view[0].Value != "" || view[0].ValueSource != "resource" || view[0].SourceLabel != "Approved MySQL" {
+		t.Fatal("resource injection must be shown as configured, without returning its secret")
+	}
+	if view[1].Value != "own-original" || view[1].ValueSource != "configured" || !view[1].HasValue {
+		t.Fatal("original application override must be preserved")
+	}
+	if view[2].HasValue || view[2].ValueSource != "missing" || stored[0].ValueSource != "" {
+		t.Fatal("missing and stored values must not be changed by presentation metadata")
+	}
+	env, err := mergeAppEnvironment(resources, []string{"mysql"}, view)
+	if err != nil || env[0].Value != "fixture-secret" || env[2].Value != "own-original" {
+		t.Fatal("saving unchanged resource bindings must keep the effective credentials")
+	}
+}
+
 func TestUnknownConflictingAndMissingResourceBindingsRejected(t *testing.T) {
 	resources := []config.OnlineResourceConfig{{ID: "a", EnvVars: map[string]string{"SERVICE_URL": "http://a"}}, {ID: "b", EnvVars: map[string]string{"SERVICE_URL": "http://b"}}}
 	for _, ids := range [][]string{{"unknown"}, {"a", "a"}, {"a", "b"}} {
