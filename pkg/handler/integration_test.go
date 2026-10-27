@@ -468,6 +468,9 @@ func TestIntegrationFlow_WorkDesktopFullChain(t *testing.T) {
 	if accessClaims["sub"] != link.ID || accessClaims["aud"] != "work" || accessClaims["type"] != "access" {
 		t.Fatalf("access claims mismatch: %v", accessClaims)
 	}
+	if spacesDetail, ok := tokenResp["spaces_detail"].([]interface{}); !ok || len(spacesDetail) != 2 {
+		t.Fatalf("expected 2 spaces_detail in tokenResp, got: %v", tokenResp["spaces_detail"])
+	}
 	refreshClaims := parsePlatformClaims(t, refresh)
 	if refreshClaims["sid"] != accessClaims["sid"] || refreshClaims["type"] != "refresh" {
 		t.Fatalf("refresh claims mismatch: %v", refreshClaims)
@@ -484,6 +487,9 @@ func TestIntegrationFlow_WorkDesktopFullChain(t *testing.T) {
 	}
 	if fmt.Sprint(sessionResp["spaces"]) != "[tenant-10001 tenant-10002]" {
 		t.Fatalf("spaces = %v", sessionResp["spaces"])
+	}
+	if spacesDetail, ok := sessionResp["spaces_detail"].([]interface{}); !ok || len(spacesDetail) != 2 {
+		t.Fatalf("expected 2 spaces_detail in sessionResp, got: %v", sessionResp["spaces_detail"])
 	}
 	if sessionResp["authz_version"].(float64) != 7 {
 		t.Fatalf("authz_version = %v", sessionResp["authz_version"])
