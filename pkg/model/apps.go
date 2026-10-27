@@ -18,6 +18,10 @@ type AppConfigItem struct {
 	Value       string `json:"value"`
 	Description string `json:"description,omitempty"`
 	Required    bool   `json:"required,omitempty"`
+	HasValue    bool   `json:"has_value,omitempty"`
+	ValueSource string `json:"value_source,omitempty"`
+	SourceLabel string `json:"source_label,omitempty"`
+	ResourceID  string `json:"resource_id,omitempty"`
 }
 
 // ResourceSummary 用于给前端展示线上可用的内网资源（敏感连接串脱敏，仅返回包含的环境变量 key）

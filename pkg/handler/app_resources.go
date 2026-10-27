@@ -14,6 +14,55 @@ var appEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var appSensitiveKey = regexp.MustCompile(`(?i)password|passwd|secret|token|dsn|database_url|connection|credential|api_key|access_key`)
 var appSensitiveAssignment = regexp.MustCompile(`(?i)(password|passwd|secret|token|dsn|api[_-]?key|access[_-]?key)[^\s:=]*\s*[:=]\s*\S+`)
 
+// Describe stored overrides and runtime injection separately. A blank override does not
+// mean a selected resource's existing credential has been erased.
+func describeAppConfig(resources []config.OnlineResourceConfig, ids []string, configs []model.AppConfigItem) []model.AppConfigItem {
+	sources := make(map[string]string)
+	for _, id := range ids {
+		for _, resource := range resources {
+			if resource.ID == id {
+				for key, value := range resource.EnvVars {
+					if value != "" {
+						sources[key] = resource.Name
+						if sources[key] == "" {
+							sources[key] = id
+						}
+					}
+				}
+			}
+		}
+	}
+	out := make([]model.AppConfigItem, len(configs))
+	copy(out, configs)
+	for i := range out {
+		if out[i].ResourceID != "" {
+			out[i].HasValue = false
+			out[i].ValueSource = "resource"
+			for _, resource := range resources {
+				if resource.ID == out[i].ResourceID {
+					out[i].HasValue = resource.EnvVars[out[i].Key] != ""
+					out[i].SourceLabel = resource.Name
+				}
+			}
+			continue
+		}
+		if out[i].ValueSource == "manual" || out[i].ValueSource == "original" {
+			out[i].HasValue = out[i].Value != ""
+			continue
+		}
+		out[i].HasValue = out[i].Value != "" || sources[out[i].Key] != ""
+		out[i].ValueSource = "missing"
+		out[i].SourceLabel = ""
+		if out[i].Value != "" {
+			out[i].ValueSource = "configured"
+		} else if sources[out[i].Key] != "" {
+			out[i].ValueSource = "resource"
+			out[i].SourceLabel = sources[out[i].Key]
+		}
+	}
+	return out
+}
+
 func redactAppRuntimeLogs(logs string, env []model.AppConfigItem) string {
 	for _, item := range env {
 		if item.Value != "" && appSensitiveKey.MatchString(item.Key) {
@@ -40,6 +89,11 @@ func mergeAppEnvironment(resources []config.OnlineResourceConfig, ids []string, 
 		available[resource.ID] = resource
 	}
 	values := make(map[string]string)
+	// New clients confirm a resource for each field. Keep legacy bulk bindings for old apps.
+	explicit := false
+	for _, item := range configs {
+		explicit = explicit || item.ResourceID != "" || item.ValueSource == "manual" || item.ValueSource == "original"
+	}
 	seenResources := make(map[string]bool)
 	for _, id := range ids {
 		resource, ok := available[id]
@@ -47,6 +101,9 @@ func mergeAppEnvironment(resources []config.OnlineResourceConfig, ids []string, 
 			return nil, fmt.Errorf("unknown or duplicate resource: %s", id)
 		}
 		seenResources[id] = true
+		if explicit {
+			continue
+		}
 		for key, value := range resource.EnvVars {
 			if !appEnvName.MatchString(key) {
 				return nil, fmt.Errorf("invalid resource environment key")
@@ -63,6 +120,21 @@ func mergeAppEnvironment(resources []config.OnlineResourceConfig, ids []string, 
 			return nil, fmt.Errorf("invalid or duplicate application key: %s", item.Key)
 		}
 		seenConfigs[item.Key] = true
+		if explicit {
+			if item.ResourceID != "" {
+				resource, ok := available[item.ResourceID]
+				if !ok || !seenResources[item.ResourceID] || resource.EnvVars[item.Key] == "" || item.Value != "" {
+					return nil, fmt.Errorf("invalid resource binding for key: %s", item.Key)
+				}
+				values[item.Key] = resource.EnvVars[item.Key]
+			} else {
+				values[item.Key] = item.Value
+			}
+			if item.Required && values[item.Key] == "" {
+				return nil, fmt.Errorf("missing required configuration: %s", item.Key)
+			}
+			continue
+		}
 		// Blank UI fields represent server-side resource injection, not an instruction to erase it.
 		if item.Value != "" || values[item.Key] == "" {
 			values[item.Key] = item.Value
