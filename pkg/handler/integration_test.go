@@ -503,9 +503,16 @@ func TestIntegrationFlow_WorkDesktopFullChain(t *testing.T) {
 	if rw.Code != http.StatusOK {
 		t.Fatalf("refresh = %d, body=%s", rw.Code, rw.Body.String())
 	}
-	newRefresh, _ := decodeBody(t, rw)["refresh_token"].(string)
+	refreshResp := decodeBody(t, rw)
+	newRefresh, _ := refreshResp["refresh_token"].(string)
 	if newRefresh == "" || newRefresh == refresh {
 		t.Fatalf("refresh rotation returned same token")
+	}
+	if spaces, ok := refreshResp["spaces"].([]interface{}); !ok || len(spaces) != 2 {
+		t.Fatalf("expected 2 spaces in refreshResp, got: %v", refreshResp["spaces"])
+	}
+	if spacesDetail, ok := refreshResp["spaces_detail"].([]interface{}); !ok || len(spacesDetail) != 2 {
+		t.Fatalf("expected 2 spaces_detail in refreshResp, got: %v", refreshResp["spaces_detail"])
 	}
 
 	reuse := doPostJSON(t, r, "/integration/v1/auth/refresh", gin.H{"refresh_token": refresh}, nil)

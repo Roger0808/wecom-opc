@@ -618,7 +618,7 @@ func (h *IntegrationHandler) Refresh(c *gin.Context) {
 	presentedHash := sha256Hex(req.RefreshToken)
 	switch {
 	case presentedHash == session.RefreshVerifierHash:
-		h.rotateRefresh(c, ctx, session, sub)
+		h.rotateRefresh(c, ctx, session, link, ents, sub)
 	case session.PreviousVerifierHash != nil && presentedHash == *session.PreviousVerifierHash:
 		h.revokeFamilyForReuse(c, ctx, session)
 	default:
@@ -626,7 +626,7 @@ func (h *IntegrationHandler) Refresh(c *gin.Context) {
 	}
 }
 
-func (h *IntegrationHandler) rotateRefresh(c *gin.Context, ctx context.Context, session *model.Session, sub string) {
+func (h *IntegrationHandler) rotateRefresh(c *gin.Context, ctx context.Context, session *model.Session, link *model.IdentityLink, ents []model.ManagedEntitlement, sub string) {
 	now := time.Now()
 	accessJWT, err := h.signPlatformJWT(map[string]interface{}{
 		"sub":  session.IdentityLinkID,
@@ -668,10 +668,52 @@ func (h *IntegrationHandler) rotateRefresh(c *gin.Context, ctx context.Context, 
 		"subject":    sub,
 	}, c)
 
+	email, displayName := "", ""
+	if ku, uerr := kbridge.NewWeKnoraStore(h.storage).GetUserByID(ctx, link.KnowledgeUserID); uerr == nil && ku != nil {
+		email, displayName = ku.Email, ku.Username
+	}
+	tenantSet := make(map[string]struct{}, len(ents))
+	capSet := make(map[string]struct{}, len(ents))
+	authzVersion := session.AuthzVersion
+	for _, e := range ents {
+		if e.TenantID != "" {
+			tenantSet[e.TenantID] = struct{}{}
+		}
+		if e.Capability != "" {
+			capSet[e.Capability] = struct{}{}
+		}
+		if e.AuthzVersion > authzVersion {
+			authzVersion = e.AuthzVersion
+		}
+	}
+	tenants := make([]string, 0, len(tenantSet))
+	for t := range tenantSet {
+		tenants = append(tenants, t)
+	}
+	sort.Strings(tenants)
+	capabilities := make([]string, 0, len(capSet))
+	for cap := range capSet {
+		capabilities = append(capabilities, cap)
+	}
+	sort.Strings(capabilities)
+	tenant := ""
+	if len(tenants) > 0 {
+		tenant = tenants[0]
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"access_token":  accessJWT,
 		"refresh_token": refreshJWT,
 		"expires_in":    int(accessTokenTTL.Seconds()),
+		"subject":       link.ImmutableSubject,
+		"spaces":        tenants,
+		"spaces_detail": h.resolveSpacesDetail(ctx, tenants),
+		"authz_version": authzVersion,
+		"capabilities":  capabilities,
+		"email":         email,
+		"name":          displayName,
+		"tenant":        tenant,
+		"tenants":       tenants,
 	})
 }
 
