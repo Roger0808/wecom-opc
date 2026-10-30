@@ -132,6 +132,15 @@ func main() {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 	})
 
+	r.GET("/admin/nav", func(c *gin.Context) {
+		content, err := web.AdminFS.ReadFile("nav.html")
+		if err != nil {
+			c.String(http.StatusInternalServerError, "Admin nav template not found")
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
+	})
+
 	r.GET("/admin/static/:filename", func(c *gin.Context) {
 		filename := c.Param("filename")
 		content, err := web.AdminFS.ReadFile(filename)

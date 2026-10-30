@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>系统导航 | WeKnora 配置同步控制台</title>
+  <!-- Tailwind CSS: 本地优先，国内CDN与海外CDN多重兜底（与 /admin 一致） -->
+  <script src="/admin/static/tailwindcss.js" onerror="this.onerror=null;this.src='https://cdn.tailwindcss.com';"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen">
+  <div class="flex flex-col min-h-screen">
+
+    <!-- 顶部导航栏：与主控制台同款 -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center text-white font-bold text-lg shadow-md shadow-indigo-100">
+            W
+          </div>
+          <div>
+            <h1 class="text-base font-bold text-slate-900 leading-tight">系统导航</h1>
+            <p class="text-xs text-slate-500">各子系统管理后台快捷入口</p>
+          </div>
+        </div>
+
+        <a
+          href="/admin"
+          class="inline-flex items-center px-3 py-1.5 border border-slate-300 shadow-sm text-xs font-medium rounded-lg text-slate-700 bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
+          <svg class="w-4 h-4 mr-1.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+          </svg>
+          返回同步控制台
+        </a>
+      </div>
+    </header>
+
+    <!-- 主体区域 -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-8">
+
+      <!-- 平台组件 -->
+      <section>
+        <div class="flex items-center space-x-2 mb-4">
+          <h2 class="text-sm font-bold text-slate-900">平台组件</h2>
+          <span class="px-2 py-0.5 rounded text-[11px] bg-indigo-100 text-indigo-700 font-semibold border border-indigo-200">4</span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+          <!-- LLM Gateway Admin -->
+          <a href="https://shtokendance.benlai.com/llm-gateway" target="_blank" rel="noopener noreferrer"
+             class="group bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:border-indigo-300 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 flex flex-col">
+            <div class="flex items-start justify-between">
+              <div class="w-11 h-11 rounded-xl bg-indigo-50 flex items-center justify-center text-xl">🧠</div>
+              <span class="text-[10px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">生产</span>
+            </div>
+            <h3 class="mt-4 text-sm font-bold text-slate-900 group-hover:text-indigo-700 transition-colors">LLM Gateway Admin</h3>
+            <p class="mt-1 text-xs text-slate-500 leading-relaxed">llm-gateway 管理台：模型接入、路由与密钥配置</p>
+            <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+              <code class="text-[11px] text-slate-400 truncate">shtokendance.benlai.com/llm-gateway</code>
+              <svg class="w-4 h-4 flex-shrink-0 text-slate-300 group-hover:text-indigo-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+              </svg>
+            </div>
+          </a>
+
+          <!-- MCP Admin -->
+          <a href="http://shtokendance.benlai.com/mcp-admin" target="_blank" rel="noopener noreferrer"
+             class="group bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:border-emerald-300 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 flex flex-col">
+            <div class="flex items-start justify-between">
+              <div class="w-11 h-11 rounded-xl bg-emerald-50 flex items-center justify-center text-xl">🛠️</div>
+              <span class="text-[10px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">生产</span>
+            </div>
+            <h3 class="mt-4 text-sm font-bold text-slate-900 group-hover:text-emerald-700 transition-colors">MCP Admin</h3>
+            <p class="mt-1 text-xs text-slate-500 leading-relaxed">mcp-admin 管理台：MCP 服务与工具注册发布管理</p>
+            <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+              <code class="text-[11px] text-slate-400 truncate">shtokendance.benlai.com/mcp-admin</code>
+              <svg class="w-4 h-4 flex-shrink-0 text-slate-300 group-hover:text-emerald-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+              </svg>
+            </div>
+          </a>
+
+          <!-- MCP Gateway -->
+          <a href="http://shtokendance.benlai.com/mcp-gateway" target="_blank" rel="noopener noreferrer"
+             class="group bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 flex flex-col">
+            <div class="flex items-start justify-between">
+              <div class="w-11 h-11 rounded-xl bg-sky-50 flex items-center justify-center text-xl">🔌</div>
+              <span class="text-[10px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">生产</span>
+            </div>
+            <h3 class="mt-4 text-sm font-bold text-slate-900 group-hover:text-sky-700 transition-colors">MCP Gateway</h3>
+            <p class="mt-1 text-xs text-slate-500 leading-relaxed">mcp-gateway 服务网关：MCP 协议对外访问入口</p>
+            <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+              <code class="text-[11px] text-slate-400 truncate">shtokendance.benlai.com/mcp-gateway</code>
+              <svg class="w-4 h-4 flex-shrink-0 text-slate-300 group-hover:text-sky-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+              </svg>
+            </div>
+          </a>
+
+          <!-- Knowledge OPC -->
+          <a href="https://shtokendance.benlai.com/" target="_blank" rel="noopener noreferrer"
+             class="group bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:border-amber-300 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 flex flex-col">
+            <div class="flex items-start justify-between">
+              <div class="w-11 h-11 rounded-xl bg-amber-50 flex items-center justify-center text-xl">📚</div>
+              <span class="text-[10px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">生产</span>
+            </div>
+            <h3 class="mt-4 text-sm font-bold text-slate-900 group-hover:text-amber-700 transition-colors">Knowledge OPC</h3>
+            <p class="mt-1 text-xs text-slate-500 leading-relaxed">knowledage-opc 知识库平台主站：空间与文档管理</p>
+            <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+              <code class="text-[11px] text-slate-400 truncate">shtokendance.benlai.com</code>
+              <svg class="w-4 h-4 flex-shrink-0 text-slate-300 group-hover:text-amber-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+              </svg>
+            </div>
+          </a>
+
+        </div>
+      </section>
+
+      <!-- 可观测性 -->
+      <section>
+        <div class="flex items-center space-x-2 mb-4">
+          <h2 class="text-sm font-bold text-slate-900">可观测性</h2>
+          <span class="px-2 py-0.5 rounded text-[11px] bg-rose-100 text-rose-700 font-semibold border border-rose-200">1</span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+          <!-- Langfuse -->
+          <a href="https://langfuse.tokendance.sh/" target="_blank" rel="noopener noreferrer"
+             class="group bg-white rounded-xl p-5 border border-slate-200 shadow-sm hover:border-rose-300 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 flex flex-col">
+            <div class="flex items-start justify-between">
+              <div class="w-11 h-11 rounded-xl bg-rose-50 flex items-center justify-center text-xl">📈</div>
+              <span class="text-[10px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">生产</span>
+            </div>
+            <h3 class="mt-4 text-sm font-bold text-slate-900 group-hover:text-rose-700 transition-colors">Langfuse</h3>
+            <p class="mt-1 text-xs text-slate-500 leading-relaxed">LLM 可观测平台：调用追踪、评测与成本分析</p>
+            <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+              <code class="text-[11px] text-slate-400 truncate">langfuse.tokendance.sh</code>
+              <svg class="w-4 h-4 flex-shrink-0 text-slate-300 group-hover:text-rose-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+              </svg>
+            </div>
+          </a>
+
+        </div>
+      </section>
+
+      <!-- 页脚提示 -->
+      <p class="text-xs text-slate-400 text-center pt-2">提示：所有入口均在新标签页打开；如无法访问，请确认当前网络环境及各系统的登录权限。</p>
+
+    </main>
+  </div>
+</body>
+</html>
